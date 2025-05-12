@@ -3,56 +3,28 @@ package com.grindrplus.core
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
-import com.grindrplus.BuildConfig
 import com.grindrplus.GrindrPlus
 import com.grindrplus.GrindrPlus.context
 import com.grindrplus.GrindrPlus.httpClient
 import com.grindrplus.GrindrPlus.isImportingSomething
 import com.grindrplus.GrindrPlus.shouldTriggerAntiblock
 import com.grindrplus.core.Constants.NEWLINE
-import com.grindrplus.ui.Utils.getId
-import com.grindrplus.utils.RetrofitUtils
+import de.robv.android.xposed.XposedHelpers.callMethod
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.lang.reflect.Proxy
 import kotlin.math.pow
 
 object Utils {
-    fun createServiceProxy(
-        originalService: Any,
-        serviceClass: Class<*>,
-        blacklist: Array<String> = emptyArray()
-    ): Any {
-        val invocationHandler = Proxy.getInvocationHandler(originalService)
-        val successConstructor =
-            GrindrPlus.loadClass(RetrofitUtils.SUCCESS_CLASS_NAME).constructors.firstOrNull()
-        return Proxy.newProxyInstance(
-            originalService.javaClass.classLoader,
-            arrayOf(serviceClass)
-        ) { proxy, method, args ->
-            if (successConstructor != null && (blacklist.isEmpty() || method.name in blacklist)) {
-                successConstructor.newInstance(Unit)
-            } else {
-                invocationHandler.invoke(proxy, method, args)
-            }
-        }
-    }
-
     fun openChat(id: String) {
         val chatActivityInnerClass =
             GrindrPlus.loadClass("com.grindrapp.android.chat.presentation.ui.ChatActivityV2\$a")
@@ -93,7 +65,7 @@ object Utils {
 
         val intent = method?.invoke(
             null,
-            GrindrPlus.context,
+            context,
             chatArgsInstance
         ) as Intent?
 
@@ -107,7 +79,7 @@ object Utils {
             Intent::class.java
         )
 
-        startActivityMethod.invoke(null, GrindrPlus.context, intent)
+        startActivityMethod.invoke(null, context, intent)
     }
 
     fun openProfile(id: String) {
@@ -123,7 +95,7 @@ object Utils {
 
         val intent = method?.invoke(
             null,
-            GrindrPlus.context,
+            context,
             id,
             referrerType
         ) as Intent?
@@ -137,24 +109,7 @@ object Utils {
             Intent::class.java
         )
 
-        startActivityMethod.invoke(null, GrindrPlus.context, intent)
-    }
-
-    fun weightToNum(isMetric: Boolean, weight: String): Double {
-        return if (isMetric) {
-            weight.replace("kg", "").toDouble()
-        } else {
-            weight.replace("lbs", "").toDouble()
-        }
-    }
-
-    fun heightToNum(isMetric: Boolean, height: String): Double {
-        return if (isMetric) {
-            height.replace("cm", "").toDouble()
-        } else {
-            val heightTokens = height.split("\'", "\"")
-            heightTokens[0].toDouble() * 12 + heightTokens[1].toDouble()
-        }
+        startActivityMethod.invoke(null, context, intent)
     }
 
     fun calculateBMI(isMetric: Boolean, weight: Double, height: Double): Double {
@@ -193,71 +148,26 @@ object Utils {
         }
     }
 
-    @SuppressLint("MissingPermission", "NotificationPermission")
-    fun sendNotification(
-        context: Context,
-        title: String,
-        message: String,
-        notificationId: Int,
-        channelId: String = "default_channel_id",
-        channelName: String = "Default Channel",
-        channelDescription: String = "Default notifications"
-    ) {
-        val importance = NotificationManager.IMPORTANCE_DEFAULT
-        val channel = NotificationChannel(channelId, channelName, importance).apply {
-            description = channelDescription
-        }
-        val notificationManager: NotificationManager =
-            context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.createNotificationChannel(channel)
-
-        val notificationBuilder = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(getId("applovin_ic_warning","drawable", context))
-            .setContentTitle(title)
-            .setContentText(message)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .setAutoCancel(true)
-
-        with(NotificationManagerCompat.from(context)) {
-            notify(notificationId, notificationBuilder.build())
-        }
+    fun coordsToGeoHash(lat: Double, lon: Double, precision: Int = 12): String {
+        return GrindrPlus.loadClass("ch.hsr.geohash.GeoHash")
+            .getMethod("geoHashStringWithCharacterPrecision",
+                Double::class.java, Double::class.java, Int::class.java)
+            .invoke(null, lat, lon, precision) as String
     }
 
-    fun getSystemInfo(context: Context, shouldAddSeparator: Boolean = true): String {
-        return buildString {
-            if (shouldAddSeparator) appendLine("========================================")
-            appendLine("Android version: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
-            appendLine("ABI(s): ${Build.SUPPORTED_ABIS.joinToString(", ")}")
-            appendLine(
-                "Security patch: ${Build.VERSION.SECURITY_PATCH}"
-            )
-            appendLine("Device model: ${Build.MODEL} (${Build.MANUFACTURER})")
-            appendLine(
-                try {
-                    val grindr = context.packageManager.getPackageInfo("com.grindrapp.android", 0)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
-                        "Grindr: ${grindr.versionName} (${grindr.longVersionCode})"
-                    else
-                        "Grindr: ${grindr.versionName} (${grindr.versionCode})"
-                } catch (e: Exception) {
-                    "Grindr: N/A"
-                }
-            )
-            appendLine(
-                try {
-                    val lspatch = context.packageManager.getPackageInfo("org.lsposed.lspatch", 0)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
-                        "LSPatch: ${lspatch.versionName} (${lspatch.longVersionCode})"
-                    else
-                        "LSPatch: ${lspatch.versionName} (${lspatch.versionCode})"
-                } catch (e: Exception) {
-                    "LSPatch: N/A"
-                }
-            )
-            appendLine("GrindrPlus: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
-            appendLine("Xposed API: ${Config.get("xposed_version", "N/A") as Int}")
-            if (shouldAddSeparator) appendLine("========================================")
-        }
+    fun updateLocalSession() {
+        val refreshSessionUseCases =
+            GrindrPlus.instanceManager.getInstance<Any>(GrindrPlus.refreshSessionUseCases)!!
+        val userSessionInstance = GrindrPlus.instanceManager.getInstance<Any>(GrindrPlus.userSession)!!
+
+        val sessionIdFlow = callMethod(userSessionInstance, "s") as Any
+        val sessionId = callMethod(sessionIdFlow, "getValue") as Any
+        val authToken = callMethod(userSessionInstance, "getAuthToken") as String
+
+        val sessionRefreshData =
+            GrindrPlus.loadClass("s8.a1").constructors.first().newInstance(sessionId, authToken)
+
+        callMethod(refreshSessionUseCases, "e", sessionRefreshData, authToken, sessionId)
     }
 
     @SuppressLint("SetTextI18n")

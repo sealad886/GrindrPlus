@@ -2,7 +2,11 @@ package com.grindrplus.hooks
 
 import android.annotation.SuppressLint
 import android.view.View
+import com.grindrplus.GrindrPlus
 import com.grindrplus.core.Logger
+import com.grindrplus.core.logd
+import com.grindrplus.core.loge
+import com.grindrplus.ui.Utils.copyToClipboard
 import com.grindrplus.utils.Hook
 import com.grindrplus.utils.HookStage
 import com.grindrplus.utils.hook
@@ -11,47 +15,49 @@ class EnableUnlimited : Hook(
     "Enable unlimited",
     "Enable Grindr Unlimited features"
 ) {
-    private val persistentAdBannerContainer = "f6.s3" // search for 'GrindrAdContainer grindrAdContainer = (GrindrAdContainer) ViewBindings.findChildViewById(view, R.id.persistent_banner_ad_container);'
-    private val userSession = "gb.Z" // search for 'com.grindrapp.android.storage.UserSessionImpl$1'
+    private val paywallUtils = "Qb.d" // search for 'app_restart_required'
+    private val persistentAdBannerContainer = "m6.s3" // search for 'GrindrAdContainer grindrAdContainer = (GrindrAdContainer) ViewBindings.findChildViewById(view, R.id.persistent_banner_ad_container);'
+    private val userSession = "Bb.o0" // search for 'com.grindrapp.android.storage.UserSessionImpl$1'
     private val subscribeToInterstitialsList = listOf(
-        "D5.c0\$a" // search for 'com.grindrapp.android.chat.presentation.ui.ChatActivityV2$subscribeToInterstitialAds$1$1$1'
+        "K5.O\$a" // search for 'com.grindrapp.android.chat.presentation.ui.ChatActivityV2$subscribeToInterstitialAds$1$1$1'
     )
     private val viewsToHide = mapOf(
-        "com.grindrapp.android.ui.tagsearch.ProfileTagCascadeFragment\$d" to listOf("upsell_bottom_bar"),
-        "com.grindrapp.android.ui.browse.CascadeFragment\$b" to listOf("upsell_bottom_bar"),
-        "com.grindrapp.android.ui.home.HomeActivity\$n" to listOf("persistentAdBannerContainer"),
-        "com.grindrapp.android.ui.drawer.DrawerProfileFragment\$d" to listOf("sideDrawerBoostContainer")
+        "com.grindrapp.android.ui.tagsearch.ProfileTagCascadeFragment\$c" to listOf("upsell_bottom_bar"), // search for 'bind(Landroid/view/View;)Lcom/grindrapp/android/databinding/ProfileTagCascadeFragmentBinding;'
+        "com.grindrapp.android.ui.browse.CascadeFragment\$b" to listOf("upsell_bottom_bar", "micros_fab", "right_now_progress_compose_view"), // search for '"bind(Landroid/view/View;)Lcom/grindrapp/android/databinding/FragmentBrowseCascadeBinding;"'
+        "com.grindrapp.android.ui.home.HomeActivity\$l" to listOf("persistentAdBannerContainer"), // search for 'ViewBindings.findChildViewById(inflate, R.id.activity_home_content)) != null) {'
+        "com.grindrapp.android.ui.drawer.DrawerProfileFragment\$e" to listOf("plans_title", "store_in_profile_drawer_card", "sideDrawerBoostContainer"), // search for '"bind(Landroid/view/View;)Lcom/grindrapp/android/databinding/DrawerProfileBinding;"'
+        "com.grindrapp.android.radar.presentation.ui.RadarFragment\$c" to listOf("micros_fab") // search for 'bind(Landroid/view/View;)Lcom/grindrapp/android/databinding/FragmentRadarBinding;'
     )
 
     override fun init() {
         val userSessionClass = findClass(userSession)
 
         userSessionClass.hook( // isNoXtraUpsell()
-            "k", HookStage.BEFORE // search for '()) ? false : true;' in userSession
+            "l", HookStage.BEFORE // search for '()) ? false : true;' in userSession
         ) { param ->
             param.setResult(true)
         }
 
         userSessionClass.hook( // isNoPlusUpsell()
-            "F", HookStage.BEFORE // search for 'Role.PLUS, Role.FREE_PLUS' in userSession
+            "G", HookStage.BEFORE // search for 'Role.PLUS, Role.FREE_PLUS' in userSession
         ) { param ->
             param.setResult(true)
         }
 
         userSessionClass.hook( // isFree()
-            "x", HookStage.BEFORE // search for '.isEmpty();' in userSession
+            "y", HookStage.BEFORE // search for '.isEmpty();' in userSession
         ) { param ->
             param.setResult(false)
         }
 
         userSessionClass.hook( // isFreeXtra()
-            "t", HookStage.BEFORE // search for 'Role.XTRA, Role.FREE_XTRA' in userSession
+            "u", HookStage.BEFORE // search for 'Role.XTRA, Role.FREE_XTRA' in userSession
         ) { param ->
             param.setResult(false)
         }
 
         userSessionClass.hook( // isFreeUnlimited()
-            "D", HookStage.BEFORE // search for 'Role.UNLIMITED, Role.FREE_UNLIMITED' in userSession
+            "E", HookStage.BEFORE // search for 'Role.UNLIMITED, Role.FREE_UNLIMITED' in userSession
         ) { param ->
             param.setResult(true)
         }
@@ -86,8 +92,33 @@ class EnableUnlimited : Hook(
             }
         }
 
+        findClass(paywallUtils).hook("e", HookStage.BEFORE) { param ->
+            val stackTrace = Thread.currentThread().stackTrace.dropWhile {
+                !it.toString().contains("LSPHooker") }.drop(1).joinToString("\n")
+
+            android.app.AlertDialog.Builder(GrindrPlus.currentActivity)
+                .setTitle("Paywalled Feature Detected")
+                .setMessage(
+                    "This feature is server-enforced and cannot be bypassed in this version.\n\n" +
+                            "If you think this is a mistake, please report it to the developer. " +
+                            "You can copy the stack trace below to help with troubleshooting."
+                )
+                .setIcon(android.R.drawable.ic_dialog_alert)
+                .setCancelable(false)
+                .setNegativeButton("Copy Stack Trace") { _, _ ->
+                    copyToClipboard(
+                        "Stack trace",
+                        stackTrace
+                    )
+                }
+                .setPositiveButton("Ok", null)
+                .show()
+
+            param.setResult(null)
+        }
+
         // search for 'variantName, "treatment_exact_count") ?'
-        findClass("W1.a").hook("b", HookStage.BEFORE) { param ->
+        findClass("a2.a").hook("b", HookStage.BEFORE) { param ->
            param.setResult(false)
         }
     }
@@ -101,17 +132,18 @@ class EnableUnlimited : Hook(
                 if (id > 0) {
                     val view = rootView.findViewById<View>(id)
                     if (view != null) {
-                        Logger.d("View with ID: $viewId found and will be hidden")
+                        logd("View with ID: $viewId found and will be hidden")
                         val params = view.layoutParams
                         params.height = 0
                         view.layoutParams = params
                         view.visibility = View.GONE
                     }
                 } else {
-                    Logger.d("View with ID: $viewId not found")
+                    logd("View with ID: $viewId not found")
                 }
             } catch (e: Exception) {
-                Logger.e("Error hiding view with ID: $viewId: ${e.message}")
+                loge("Error hiding view with ID: $viewId: ${e.message}")
+                Logger.writeRaw(e.stackTraceToString())
             }
         }
     }

@@ -1,31 +1,38 @@
 package com.grindrplus
 
-import Database
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.Application
 import android.app.Application.ActivityLifecycleCallbacks
 import android.content.Context
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
+import android.os.Looper
 import android.widget.Toast
 import com.grindrplus.bridge.BridgeClient
 import com.grindrplus.core.Config
-import com.grindrplus.core.CoroutineHelper
 import com.grindrplus.core.InstanceManager
 import com.grindrplus.core.Logger
 import com.grindrplus.core.LogSource
+import com.grindrplus.core.TaskScheduler
+import com.grindrplus.utils.TaskManager
+import com.grindrplus.core.Utils.coordsToGeoHash
 import com.grindrplus.core.Utils.handleImports
 import com.grindrplus.core.http.Client
 import com.grindrplus.core.http.Interceptor
-import com.grindrplus.persistence.NewDatabase
+import com.grindrplus.persistence.GPDatabase
 import com.grindrplus.utils.HookManager
 import com.grindrplus.utils.PCHIP
 import dalvik.system.DexClassLoader
+import de.robv.android.xposed.XposedHelpers.callMethod
 import de.robv.android.xposed.XposedHelpers.getObjectField
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.OkHttpClient
@@ -34,9 +41,8 @@ import okhttp3.Response
 import org.json.JSONArray
 import java.io.File
 import java.io.IOException
+import java.lang.ref.WeakReference
 import kotlin.system.measureTimeMillis
-
-private const val TAG = "GrindrPlus"
 
 @SuppressLint("StaticFieldLeak")
 object GrindrPlus {
@@ -44,14 +50,10 @@ object GrindrPlus {
         private set
     lateinit var classLoader: ClassLoader
         private set
-    lateinit var newDatabase: NewDatabase
-        private set
-    lateinit var database: Database
+    lateinit var database: GPDatabase
         private set
     lateinit var bridgeClient: BridgeClient
         internal set
-    lateinit var coroutineHelper: CoroutineHelper
-        private set
     lateinit var instanceManager: InstanceManager
         private set
     lateinit var httpClient: Client
@@ -65,6 +67,9 @@ object GrindrPlus {
     var blockCaller: String = ""
     var isImportingSomething = false
     var myProfileId: String = ""
+    var hasCheckedVersions = false
+    var shouldShowVersionMismatchDialog = false
+    var shouldShowBridgeConnectionError = false
 
     var spline = PCHIP(
         listOf(
@@ -89,49 +94,73 @@ object GrindrPlus {
         )
     )
 
-    var currentActivity: Activity? = null
-        private set
+    val currentActivity: Activity?
+        get() = currentActivityRef?.get()
 
-    private val userAgent = "n6.h" // search for 'grindr3/'
-    private val userSession = "gb.Z" // search for 'com.grindrapp.android.storage.UserSessionImpl$1'
+    private val userAgent = "u6.f" // search for 'grindr3/'
+    internal val userSession = "Bb.o0" // search for 'com.grindrapp.android.storage.UserSessionImpl$1'
     private val deviceInfo =
-        "Z3.B" // search for 'AdvertisingIdClient.Info("00000000-0000-0000-0000-000000000000", true)'
-    private val profileRepo = "com.grindrapp.android.persistence.repository.ProfileRepo"
+        "i4.B" // search for 'AdvertisingIdClient.Info("00000000-0000-0000-0000-000000000000", true)'
+    internal val grindrLocationProvider = "n8.d" // search for 'system settings insufficient for location request, attempting to resolve'
+    internal val refreshSessionUseCases = "s8.Y0" // search for 'JoinPreviousOrRun(name='
+
     private val ioScope = CoroutineScope(Dispatchers.IO)
+    private val taskScheduer = TaskScheduler(ioScope)
+    internal val taskManager = TaskManager(taskScheduer)
+    private var currentActivityRef: WeakReference<Activity>? = null
 
     private val splineDataEndpoint =
         "https://raw.githubusercontent.com/R0rt1z2/GrindrPlus/refs/heads/master/spline.json"
 
-    fun init(modulePath: String, application: Application) {
-        this.context = application // do not use .applicationContext as it's null at this point
+    fun init(modulePath: String, application: Application,
+             versionCodes: IntArray, versionNames: Array<String>) {
+        this.context = application
         this.bridgeClient = BridgeClient(context)
 
         Logger.initialize(context, bridgeClient, true)
         Logger.i("Initializing GrindrPlus...", LogSource.MODULE)
 
-        val serviceConnected = bridgeClient.connectBlocking(10000)
-        if (!serviceConnected) {
-            Logger.w("Failed to connect to bridge service within timeout", LogSource.MODULE)
-            showToast(Toast.LENGTH_LONG, "Bridge service connection timed out")
-        } else {
-            Config.initialize(context, context.packageName)
+        checkVersionCodes(versionCodes, versionNames)
+        val connected = runBlocking {
+            try {
+                withTimeout(10000) {
+                    bridgeClient.connectWithRetry(5, 1000)
+                }
+            } catch (e: Exception) {
+                Logger.e("Connection timeout: ${e.message}", LogSource.MODULE)
+                false
+            }
         }
 
+        if (!connected) {
+            Logger.e("Failed to connect to the bridge service", LogSource.MODULE)
+            shouldShowBridgeConnectionError = true
+        }
+
+        Config.initialize(application.packageName)
         val newModule = File(context.filesDir, "grindrplus.dex")
         File(modulePath).copyTo(newModule, true)
         newModule.setReadOnly()
 
         this.classLoader =
             DexClassLoader(newModule.absolutePath, null, null, context.classLoader)
-        this.newDatabase = NewDatabase.create(context)
-        this.database = Database(context, context.filesDir.absolutePath + "/grindrplus.db")
+        this.database = GPDatabase.create(context)
         this.hookManager = HookManager()
-        this.coroutineHelper = CoroutineHelper(classLoader)
         this.instanceManager = InstanceManager(classLoader)
         this.packageName = context.packageName
 
         application.registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
+                if (shouldShowBridgeConnectionError) {
+                    showBridgeConnectionError(activity)
+                    shouldShowBridgeConnectionError = false
+                }
+
+                if (shouldShowVersionMismatchDialog) {
+                    showVersionMismatchDialog(activity)
+                    shouldShowVersionMismatchDialog = false
+                }
+
                 handleImports(activity)
             }
 
@@ -139,13 +168,13 @@ object GrindrPlus {
 
             override fun onActivityResumed(activity: Activity) {
                 Logger.d("Resuming activity: ${activity.javaClass.name}", LogSource.MODULE)
-                currentActivity = activity
+                currentActivityRef = WeakReference(activity)
             }
 
             override fun onActivityPaused(activity: Activity) {
                 Logger.d("Pausing activity: ${activity.javaClass.name}", LogSource.MODULE)
                 if (currentActivity == activity) {
-                    currentActivity = null
+                    currentActivityRef = null
                 }
             }
 
@@ -156,20 +185,34 @@ object GrindrPlus {
             override fun onActivityDestroyed(activity: Activity) {}
         })
 
-        instanceManager.hookClassConstructors(
-            userAgent,
-            userSession,
-            deviceInfo,
-            profileRepo
-        )
+        if (shouldShowVersionMismatchDialog) {
+            Logger.i("Version mismatch detected, stopping initialization", LogSource.MODULE)
+            return
+        }
 
-        instanceManager.setCallback(userSession) { uSession ->
-            myProfileId = getObjectField(uSession, "r") as String
-            instanceManager.setCallback(userAgent) { uAgent ->
-                instanceManager.setCallback(deviceInfo) { dInfo ->
-                    httpClient = Client(Interceptor(uSession, uAgent, dInfo))
+        try {
+            instanceManager.hookClassConstructors(
+                userAgent,
+                userSession,
+                deviceInfo,
+                grindrLocationProvider,
+                refreshSessionUseCases
+            )
+
+            instanceManager.setCallback(userSession) { uSession ->
+                myProfileId = getObjectField(uSession, "r") as String
+                instanceManager.setCallback(userAgent) { uAgent ->
+                    instanceManager.setCallback(deviceInfo) { dInfo ->
+                        httpClient = Client(Interceptor(uSession, uAgent, dInfo))
+                        taskManager.registerTasks() // Tasks require httpClient
+                    }
                 }
             }
+        } catch (t: Throwable) {
+            Logger.e("Failed to hook critical classes: ${t.message}", LogSource.MODULE)
+            Logger.writeRaw(t.stackTraceToString())
+            showToast(Toast.LENGTH_LONG, "Failed to hook critical classes: ${t.message}")
+            return
         }
 
         fetchRemoteData(splineDataEndpoint) { points ->
@@ -180,10 +223,11 @@ object GrindrPlus {
         try {
             val initTime = measureTimeMillis { init() }
             Logger.i("Initialization completed in $initTime ms", LogSource.MODULE)
-        } catch (e: Exception) {
-            Logger.e("Failed to initialize: ${e.message}", LogSource.MODULE)
-            Logger.writeRaw(e.stackTraceToString())
-            showToast(Toast.LENGTH_LONG, "Failed to initialize: ${e.message}")
+        } catch (t: Throwable) {
+            Logger.e("Failed to initialize: ${t.message}", LogSource.MODULE)
+            Logger.writeRaw(t.stackTraceToString())
+            showToast(Toast.LENGTH_LONG, "Failed to initialize: ${t.message}")
+            return
         }
     }
 
@@ -192,12 +236,13 @@ object GrindrPlus {
 
         if ((Config.get("reset_database", false) as Boolean)) {
             Logger.i("Resetting database...", LogSource.MODULE)
-            database.deleteDatabase()
+            database.clearAllTables()
             Config.put("reset_database", false)
         }
 
         hookManager.init()
     }
+
 
     fun runOnMainThread(appContext: Context? = null, block: (Context) -> Unit) {
         val useContext = appContext ?: context
@@ -210,7 +255,7 @@ object GrindrPlus {
         runOnMainThread {
             currentActivity?.let { activity ->
                 block(activity)
-            }
+            } ?: Logger.e("Cannot execute action - no active activity", LogSource.MODULE)
         }
     }
 
@@ -234,6 +279,115 @@ object GrindrPlus {
 
     fun loadClass(name: String): Class<*> {
         return classLoader.loadClass(name)
+    }
+
+    fun restartGrindr(timeout: Long = 0, toast: String? = null) {
+        toast?.let { showToast(Toast.LENGTH_LONG, it) }
+
+        if (timeout > 0) {
+            Handler(Looper.getMainLooper()).postDelayed({
+                val intent = context.packageManager
+                    .getLaunchIntentForPackage(context.packageName)?.apply {
+                    addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                }
+                context.startActivity(intent)
+                android.os.Process.killProcess(android.os.Process.myPid())
+            }, timeout)
+        } else {
+            val intent = context.packageManager
+                .getLaunchIntentForPackage(context.packageName)?.apply {
+                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
+            context.startActivity(intent)
+            android.os.Process.killProcess(android.os.Process.myPid())
+        }
+    }
+
+    private fun checkVersionCodes(versionCodes: IntArray, versionNames: Array<String>) {
+        val pkgInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+        val versionCode: Long = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            pkgInfo.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            pkgInfo.versionCode.toLong()
+        }
+
+        val isVersionNameSupported = pkgInfo.versionName in versionNames
+        val isVersionCodeSupported = versionCodes.any { it.toLong() == versionCode }
+
+        if (!isVersionNameSupported || !isVersionCodeSupported) {
+            val installedInfo = "${pkgInfo.versionName} (code: $versionCode)"
+            val expectedInfo = "${versionNames.joinToString(", ")} " +
+                    "(code: ${BuildConfig.TARGET_GRINDR_VERSION_CODES.joinToString(", ")})"
+            shouldShowVersionMismatchDialog = true
+            Logger.w("Version mismatch detected. Installed: $installedInfo, Required: $expectedInfo", LogSource.MODULE)
+        }
+
+        hasCheckedVersions = true
+    }
+
+    private fun showVersionMismatchDialog(activity: Activity) {
+        try {
+            val pkgInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            val versionCode: Long = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                pkgInfo.longVersionCode
+            } else {
+                @Suppress("DEPRECATION")
+                pkgInfo.versionCode.toLong()
+            }
+
+            val installedInfo = "${pkgInfo.versionName} (code: $versionCode)"
+            val expectedInfo = "${BuildConfig.TARGET_GRINDR_VERSION_NAMES.joinToString(", ")} " +
+                    "(code: ${BuildConfig.TARGET_GRINDR_VERSION_CODES.joinToString(", ")})"
+
+            val dialog = android.app.AlertDialog.Builder(activity)
+                .setTitle("GrindrPlus: Version Mismatch")
+                .setMessage("Incompatible Grindr version detected.\n\n" +
+                        "• Installed: $installedInfo\n" +
+                        "• Required: $expectedInfo\n\n" +
+                        "GrindrPlus has been disabled. Please install a compatible Grindr version.")
+                .setPositiveButton("OK") { dialog, _ -> dialog.dismiss() }
+                .setIcon(android.R.drawable.ic_dialog_alert)
+                .setCancelable(false)
+                .create()
+            dialog.show()
+            Logger.i("Version mismatch dialog shown", LogSource.MODULE)
+        } catch (e: Exception) {
+            Logger.e("Failed to show version mismatch dialog: ${e.message}", LogSource.MODULE)
+            showToast(Toast.LENGTH_LONG, "Version mismatch detected. Please install a compatible Grindr version.")
+        }
+    }
+
+    private fun showBridgeConnectionError(activity: Activity? = null) {
+        try {
+            val targetActivity = activity ?: currentActivity
+
+            if (targetActivity != null) {
+                val dialog = android.app.AlertDialog.Builder(targetActivity)
+                    .setTitle("Bridge Connection Failed")
+                    .setMessage("Failed to connect to the bridge service. The module will not work properly.\n\n" +
+                            "This may be caused by:\n" +
+                            "• Battery optimization settings\n" +
+                            "• System killing background processes\n" +
+                            "• App being force stopped\n\n" +
+                            "Try restarting the app or reinstalling the module.")
+                    .setPositiveButton("OK") { dialog, _ -> dialog.dismiss() }
+                    .setIcon(android.R.drawable.ic_dialog_alert)
+                    .setCancelable(false)
+                    .create()
+
+                targetActivity.runOnUiThread {
+                    dialog.show()
+                }
+
+                Logger.i("Bridge connection error dialog shown", LogSource.MODULE)
+            } else {
+                showToast(Toast.LENGTH_LONG, "Bridge service connection failed - module features unavailable")
+            }
+        } catch (e: Exception) {
+            Logger.e("Failed to show bridge error dialog: ${e.message}", LogSource.MODULE)
+            showToast(Toast.LENGTH_LONG, "Bridge service connection failed - module features unavailable")
+        }
     }
 
     private fun fetchRemoteData(url: String, callback: (List<Pair<Long, Int>>) -> Unit) {

@@ -27,6 +27,7 @@ class Installation(
     val version: String,
     modUrl: String,
     grindrUrl: String,
+    private val mapsApiKey: String?
 ) {
     private val keyStoreUtils = KeyStoreUtils(context)
     private val folder = context.getExternalFilesDir(null)
@@ -37,7 +38,7 @@ class Installation(
     private val bundleFile = File(folder, "grindr-$version.zip")
 
     private val installStep = InstallApkStep(outputDir)
-    private val patchApkStep = PatchApkStep(unzipFolder, outputDir, modFile, keyStoreUtils.keyStore)
+    private val patchApkStep = PatchApkStep(unzipFolder, outputDir, modFile, keyStoreUtils.keyStore, mapsApiKey)
     private val commonSteps = listOf(
         // Order matters
         CheckStorageSpaceStep(folder),
@@ -48,7 +49,7 @@ class Installation(
 
     suspend fun install(print: Print) = performOperation(
         steps = commonSteps + listOf(patchApkStep, installStep),
-        operationName = "install",
+        operationName = "install-$version",
         print = print,
     )
 
@@ -56,6 +57,7 @@ class Installation(
         packageName: String,
         appName: String,
         debuggable: Boolean,
+        embedLSpatch: Boolean,
         print: Print,
     ) = performOperation(
         steps = commonSteps + listOf(
@@ -63,9 +65,12 @@ class Installation(
                 folder = unzipFolder,
                 packageName = packageName,
                 appName = appName,
-                debuggable = debuggable
-            ), SignClonedGrindrApk(keyStoreUtils, unzipFolder),
-            patchApkStep, installStep
+                debuggable = debuggable,
+            ),
+            SignClonedGrindrApk(keyStoreUtils, unzipFolder),
+            PatchApkStep(unzipFolder, outputDir, modFile,
+                keyStoreUtils.keyStore, mapsApiKey, embedLSpatch),
+            installStep
         ),
         operationName = "clone",
         print = print,
@@ -79,7 +84,7 @@ class Installation(
         steps = listOf(
             CheckStorageSpaceStep(folder),
             ExtractBundleStep(bundleFile, unzipFolder),
-            PatchApkStep(unzipFolder, outputDir, modFile, keyStoreUtils.keyStore),
+            PatchApkStep(unzipFolder, outputDir, modFile, keyStoreUtils.keyStore, mapsApiKey),
             InstallApkStep(outputDir)
         ),
         operationName = "custom_install",

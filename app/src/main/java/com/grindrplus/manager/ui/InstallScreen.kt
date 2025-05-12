@@ -36,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.grindrplus.core.Config
 import com.grindrplus.core.Constants.GRINDR_PACKAGE_NAME
 import com.grindrplus.core.Logger
 import com.grindrplus.manager.DATA_URL
@@ -84,6 +85,7 @@ fun InstallPage(context: Activity, innerPadding: PaddingValues) {
     var customVersionName by remember { mutableStateOf("custom") }
     var customBundleUri by remember { mutableStateOf<Uri?>(null) }
     var customModUri by remember { mutableStateOf<Uri?>(null) }
+    val manifestUrl = (Config.get("custom_manifest", DATA_URL) as String).ifBlank { null }
 
     val print: Print = { output ->
         val logType = ConsoleLogger.parseLogType(output)
@@ -94,11 +96,15 @@ fun InstallPage(context: Activity, innerPadding: PaddingValues) {
 
     LaunchedEffect(selectedVersion) {
         if (selectedVersion == null) return@LaunchedEffect
+
+        val mapsApiKey = (Config.get("maps_api_key", "") as String).ifBlank { null }
+
         installation = Installation(
             context,
             selectedVersion!!.modVer,
             selectedVersion!!.modUrl,
-            selectedVersion!!.grindrUrl
+            selectedVersion!!.grindrUrl,
+            mapsApiKey
         )
     }
 
@@ -111,6 +117,7 @@ fun InstallPage(context: Activity, innerPadding: PaddingValues) {
         addLog("Loading available versions...", LogType.INFO)
 
         loadVersionData(
+            manifestUrl = manifestUrl.toString(),
             onSuccess = { data ->
                 versionData.clear()
                 versionData.addAll(data)
@@ -143,11 +150,14 @@ fun InstallPage(context: Activity, innerPadding: PaddingValues) {
                 val bundleFile = createTempFileFromUri(context, customBundleUri!!, "grindr-$customVersionName.zip")
                 val modFile = createTempFileFromUri(context, customModUri!!, "mod-$customVersionName.zip")
 
+                val mapsApiKey = (Config.get("maps_api_key", "") as String).ifBlank { null }
+
                 val customInstallation = Installation(
                     context,
                     customVersionName,
                     modFile.absolutePath,
-                    bundleFile.absolutePath
+                    bundleFile.absolutePath,
+                    mapsApiKey
                 )
 
                 withContext(Dispatchers.IO) {
@@ -173,7 +183,7 @@ fun InstallPage(context: Activity, innerPadding: PaddingValues) {
         CloneDialog(
             context = context,
             onDismiss = { showCloneDialog = false },
-            onStartCloning = { packageName, appName, debuggable ->
+            onStartCloning = { packageName, appName, debuggable, embedLSPatch ->
                 showCloneDialog = false
                 isCloning = true
                 activityScope.launch {
@@ -183,7 +193,7 @@ fun InstallPage(context: Activity, innerPadding: PaddingValues) {
 
                     val success = try {
                         installation!!.cloneGrindr(
-                            packageName, appName, debuggable,
+                            packageName, appName, debuggable, embedLSPatch,
                             print
                         )
                         true
@@ -236,6 +246,7 @@ fun InstallPage(context: Activity, innerPadding: PaddingValues) {
                 activityScope.launch {
                     addLog("Retrying version data load...", LogType.INFO)
                     loadVersionData(
+                        manifestUrl = manifestUrl.toString(),
                         onSuccess = { data ->
                             versionData.clear()
                             versionData.addAll(data)
@@ -495,6 +506,7 @@ fun ErrorScreen(errorMessage: String, onRetry: () -> Unit) {
 }
 
 private fun loadVersionData(
+    manifestUrl: String = DATA_URL,
     onSuccess: (List<Data>) -> Unit,
     onError: (String) -> Unit,
 ) {
@@ -505,8 +517,10 @@ private fun loadVersionData(
                 .readTimeout(30, TimeUnit.SECONDS)
                 .build()
 
+            Logger.d("Loading version data from $manifestUrl")
+
             val request = Request.Builder()
-                .url(DATA_URL)
+                .url(manifestUrl)
                 .build()
 
             client.newCall(request).execute().use { response ->
@@ -572,11 +586,14 @@ private fun startInstallation(
 
     activityScope.launch {
         try {
+            val mapsApiKey = (Config.get("maps_api_key", "") as String).ifBlank { null }
+
             val installation = Installation(
                 context,
                 version.modVer,
                 version.modUrl,
-                version.grindrUrl
+                version.grindrUrl,
+                mapsApiKey
             )
 
             withContext(Dispatchers.IO) {

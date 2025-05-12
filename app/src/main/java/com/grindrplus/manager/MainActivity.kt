@@ -6,8 +6,10 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Color.TRANSPARENT
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -156,6 +158,23 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun checkUnknownSourcesPermission() {
+        var allow = false
+        allow = packageManager.canRequestPackageInstalls()
+
+        if (!allow) {
+            val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                data = "package:$packageName".toUri()
+            }
+            Toast.makeText(
+                this,
+                "Please allow unknown sources for GrindrPlus",
+                Toast.LENGTH_LONG
+            ).show()
+            startActivity(intent)
+        }
+    }
+
     private fun showNotificationPermissionExplanation() {
         showPermissionDialog = true
     }
@@ -217,14 +236,17 @@ class MainActivity : ComponentActivity() {
 
             LaunchedEffect(Unit) {
                 GrindrPlus.bridgeClient = BridgeClient(this@MainActivity)
-                GrindrPlus.bridgeClient.connect {
+                GrindrPlus.bridgeClient.connectAsync { connected ->
                     Logger.initialize(this@MainActivity, GrindrPlus.bridgeClient, false)
-                    Config.initialize(null)
+                    Config.initialize()
                     HookManager().registerHooks(false)
                     calculatorScreen.value = Config.get("discreet_icon", false) as Boolean
                     serviceBound = true
 
-                    checkNotificationPermission()
+                    if (!(Config.get("disable_permission_checks", false) as Boolean)) {
+                        checkNotificationPermission()
+                        checkUnknownSourcesPermission()
+                    }
 
                     if (Config.get("analytics", true) as Boolean) {
                         val config = AndroidResourcePlausibleConfig(this@MainActivity).also {
@@ -413,6 +435,15 @@ class MainActivity : ComponentActivity() {
                                     fontWeight = FontWeight.Bold,
                                     modifier = Modifier.padding(bottom = 16.dp)
                                 )
+
+                                if (Build.MANUFACTURER.equals("samsung", ignoreCase = true)) {
+                                    Text(
+                                        text = "If you have Grindr installed in the Secure Folder, PLEASE UNINSTALL IT from there as well.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(bottom = 16.dp)
+                                    )
+                                }
 
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),

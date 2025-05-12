@@ -2,6 +2,8 @@ package com.grindrplus.hooks
 
 import com.grindrplus.GrindrPlus
 import com.grindrplus.core.Logger
+import com.grindrplus.core.logd
+import com.grindrplus.core.loge
 import com.grindrplus.utils.Hook
 import com.grindrplus.utils.HookStage
 import com.grindrplus.utils.hook
@@ -20,7 +22,7 @@ class DisableUpdates : Hook(
         "https://raw.githubusercontent.com/R0rt1z2/GrindrPlus/master/version.json"
     private val appUpdateInfo = "com.google.android.play.core.appupdate.AppUpdateInfo"
     private val appUpdateZzm = "com.google.android.play.core.appupdate.zzm" // search for 'requestUpdateInfo(%s)'
-    private val appUpgradeManager = "X7.y" // search for 'Uri.parse("market://details?id=com.grindrapp.android");'
+    private val appUpgradeManager = "s8.m" // search for 'Uri.parse("market://details?id=com.grindrapp.android");'
     private val appConfiguration = "com.grindrapp.android.platform.config.AppConfiguration"
     private var versionCode: Int = 0
     private var versionName: String = ""
@@ -64,17 +66,15 @@ class DisableUpdates : Hook(
                     val json = JSONObject(jsonData)
                     versionCode = json.getInt("versionCode")
                     versionName = json.getString("versionName")
-                    Logger.s("Successfully fetched version info: $versionName ($versionCode)")
+                    logd("Successfully fetched version info: $versionName ($versionCode)")
                     updateVersionInfo()
                 }
             } else {
                 Logger.e("Failed to fetch version info: ${response.message}")
             }
         } catch (e: Exception) {
-            Logger.apply {
-                e("Error fetching version info: ${e.message}")
-                writeRaw(e.stackTraceToString())
-            }
+            loge("Error fetching version info: ${e.message}")
+            Logger.writeRaw(e.stackTraceToString())
         }
     }
 

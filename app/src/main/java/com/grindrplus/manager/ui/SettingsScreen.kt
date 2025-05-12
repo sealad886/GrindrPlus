@@ -57,10 +57,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.core.net.toUri
 import com.grindrplus.core.Config
+import com.grindrplus.manager.settings.ApiKeyTestDialog
 import com.grindrplus.manager.settings.ButtonSetting
 import com.grindrplus.manager.settings.KeyboardType
 import com.grindrplus.manager.settings.Setting
@@ -68,6 +70,7 @@ import com.grindrplus.manager.settings.SettingGroup
 import com.grindrplus.manager.settings.SettingsViewModel
 import com.grindrplus.manager.settings.SwitchSetting
 import com.grindrplus.manager.settings.TextSetting
+import com.grindrplus.manager.settings.TextSettingWithButtons
 import com.grindrplus.manager.settings.rememberViewModel
 import com.grindrplus.manager.ui.components.PackageSelector
 import com.grindrplus.manager.utils.FileOperationHandler
@@ -84,8 +87,15 @@ fun SettingsScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var showAboutDialog by remember { mutableStateOf(false) }
+    var showResetDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
     var debugLogsScreen by remember { mutableStateOf(false) }
+
+    val showApiKeyTestDialog by viewModel.showApiKeyTestDialog.collectAsState()
+    val apiKeyTestTitle by viewModel.apiKeyTestTitle.collectAsState()
+    val apiKeyTestMessage by viewModel.apiKeyTestMessage.collectAsState()
+    val apiKeyTestRawResponse by viewModel.apiKeyTestRawResponse.collectAsState()
+    val apiKeyTestLoading by viewModel.apiKeyTestLoading.collectAsState()
 
     if (debugLogsScreen) {
         DebugLogsScreen(
@@ -102,6 +112,32 @@ fun SettingsScreen(
                     Intent(Intent.ACTION_VIEW, "https://github.com/R0rt1z2/GrindrPlus".toUri())
                 context.startActivity(intent)
             }
+        )
+    }
+
+    if (showResetDialog) {
+        ResetSettingsDialog(
+            onDismiss = { showResetDialog = false },
+            onConfirm = {
+                scope.launch {
+                    Config.writeRemoteConfig(JSONObject())
+                    val packageManager = context.packageManager
+                    val intent = packageManager.getLaunchIntentForPackage(context.packageName)
+                    intent?.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    context.startActivity(intent)
+                    android.os.Process.killProcess(android.os.Process.myPid())
+                }
+            }
+        )
+    }
+
+    if (showApiKeyTestDialog) {
+        ApiKeyTestDialog(
+            isLoading = apiKeyTestLoading,
+            title = apiKeyTestTitle,
+            message = apiKeyTestMessage,
+            rawResponse = apiKeyTestRawResponse,
+            onDismiss = viewModel::dismissApiKeyTestDialog
         )
     }
 
@@ -154,6 +190,7 @@ fun SettingsScreen(
                             DropdownMenuItem(
                                 text = { Text("Import settings") },
                                 onClick = {
+                                    expanded = false
                                     try {
                                         FileOperationHandler.importFile(
                                             arrayOf("application/json")
@@ -170,6 +207,14 @@ fun SettingsScreen(
                                             snackbarHostState.showSnackbar("Failed to import settings: ${e.message}")
                                         }
                                     }
+                                }
+                            )
+
+                            DropdownMenuItem(
+                                text = { Text("Reset settings") },
+                                onClick = {
+                                    expanded = false
+                                    showResetDialog = true
                                 }
                             )
 
@@ -229,6 +274,72 @@ fun SettingsScreen(
                                 }
                             }
                         )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ResetSettingsDialog(
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            shape = MaterialTheme.shapes.large
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Reset Settings",
+                    style = MaterialTheme.typography.headlineSmall
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = "This action will reset all settings to their default values. This action cannot be undone and the app will restart.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Button(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    ) {
+                        Text("Cancel")
+                    }
+
+                    Button(
+                        onClick = onConfirm,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError
+                        )
+                    ) {
+                        Text("Reset")
                     }
                 }
             }
@@ -317,7 +428,7 @@ fun AboutDialog(
                                 modifier = Modifier.clickable {
                                     val intent = Intent(
                                         Intent.ACTION_VIEW,
-                                        "https://github.com/Rattly".toUri()
+                                        "https://github.com/Rattlyy".toUri()
                                     )
                                     context.startActivity(intent)
                                 }
@@ -411,6 +522,7 @@ fun ImprovedSettingItem(
     when (setting) {
         is SwitchSetting -> ImprovedSwitchSetting(setting) { onSettingChanged() }
         is TextSetting -> ImprovedTextSetting(setting) { onSettingChanged() }
+        is TextSettingWithButtons -> ImprovedTextSettingWithButtons(setting) { onSettingChanged() }
         is ButtonSetting -> ImprovedButtonSetting(setting)
     }
 }
@@ -494,18 +606,6 @@ fun ImprovedTextSetting(
                     color = MaterialTheme.colorScheme.onSurface
                 )
 
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(
-                        text = text,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
-                }
-
                 setting.description?.let {
                     Text(
                         text = it,
@@ -514,7 +614,28 @@ fun ImprovedTextSetting(
                         modifier = Modifier.padding(top = 2.dp)
                     )
                 }
+
+                if (text.isNotBlank() && !isExpanded) {
+                    Surface(
+                        modifier = Modifier
+                            .padding(top = 8.dp)
+                            .fillMaxWidth(),
+                        shape = MaterialTheme.shapes.small,
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    ) {
+                        Text(
+                            text = text,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(8.dp),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
             }
+
+            Spacer(modifier = Modifier.width(8.dp))
 
             IconButton(onClick = { isExpanded = !isExpanded }) {
                 Icon(
@@ -597,6 +718,255 @@ fun ImprovedTextSetting(
                         }
                     }
                 )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    Button(
+                        onClick = {
+                            isExpanded = false
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        ),
+                        modifier = Modifier.padding(end = 8.dp)
+                    ) {
+                        Text("Cancel")
+                    }
+
+                    Button(
+                        onClick = {
+                            if (errorMessage == null) {
+                                setting.onValueChange(text)
+                                isExpanded = false
+                                onChanged()
+                            }
+                        },
+                        enabled = errorMessage == null,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                        )
+                    ) {
+                        Text("Save")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ImprovedTextSettingWithButtons(
+    setting: TextSettingWithButtons,
+    onChanged: () -> Unit,
+) {
+    var isExpanded by remember { mutableStateOf(false) }
+    var text by remember { mutableStateOf(setting.value) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(MaterialTheme.shapes.small)
+                .clickable { isExpanded = !isExpanded },
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = setting.title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+
+                setting.description?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+
+                if (text.isNotBlank() && !isExpanded) {
+                    Surface(
+                        modifier = Modifier
+                            .padding(top = 8.dp)
+                            .fillMaxWidth(),
+                        shape = MaterialTheme.shapes.small,
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    ) {
+                        Text(
+                            text = text,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(8.dp),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            IconButton(onClick = { isExpanded = !isExpanded }) {
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = "Edit setting",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.rotate(if (isExpanded) 90f else 0f)
+                )
+            }
+        }
+
+        AnimatedVisibility(visible = isExpanded) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+            ) {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { value ->
+                        text = value
+                        errorMessage = setting.validator?.invoke(value)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    isError = errorMessage != null,
+                    supportingText = {
+                        if (errorMessage != null) {
+                            Text(
+                                text = errorMessage!!,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    },
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = when (setting.keyboardType) {
+                            KeyboardType.Number -> androidx.compose.ui.text.input.KeyboardType.Number
+                            KeyboardType.Email -> androidx.compose.ui.text.input.KeyboardType.Email
+                            KeyboardType.Password -> androidx.compose.ui.text.input.KeyboardType.Password
+                            KeyboardType.Phone -> androidx.compose.ui.text.input.KeyboardType.Phone
+                            else -> androidx.compose.ui.text.input.KeyboardType.Text
+                        },
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onDone = {
+                            if (errorMessage == null) {
+                                setting.onValueChange(text)
+                                isExpanded = false
+                                onChanged()
+                            }
+                        }
+                    ),
+                    singleLine = true,
+                    shape = MaterialTheme.shapes.small,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                    ),
+                    trailingIcon = {
+                        IconButton(
+                            onClick = {
+                                if (errorMessage == null) {
+                                    setting.onValueChange(text)
+                                    isExpanded = false
+                                    onChanged()
+                                }
+                            },
+                            enabled = errorMessage == null
+                        ) {
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = "Save",
+                                tint = if (errorMessage == null)
+                                    MaterialTheme.colorScheme.primary
+                                else
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            )
+                        }
+                    }
+                )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    if (setting.buttons.isNotEmpty()) {
+                        Row(modifier = Modifier.weight(1f)) {
+                            setting.buttons.forEach { buttonAction ->
+                                Button(
+                                    onClick = {
+                                        buttonAction.action()
+                                        text = setting.value
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.primary,
+                                        contentColor = MaterialTheme.colorScheme.onPrimary
+                                    ),
+                                    modifier = Modifier.padding(end = 8.dp)
+                                ) {
+                                    Text(buttonAction.name)
+                                }
+                            }
+                        }
+                    }
+
+                    Row(
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        Button(
+                            onClick = {
+                                isExpanded = false
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                            ),
+                            modifier = Modifier.padding(end = 8.dp)
+                        ) {
+                            Text("Cancel")
+                        }
+
+                        Button(
+                            onClick = {
+                                if (errorMessage == null) {
+                                    setting.onValueChange(text)
+                                    isExpanded = false
+                                    onChanged()
+                                }
+                            },
+                            enabled = errorMessage == null,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary,
+                                disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                            )
+                        ) {
+                            Text("Save")
+                        }
+                    }
+                }
             }
         }
     }

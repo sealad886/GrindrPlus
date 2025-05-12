@@ -1,4 +1,3 @@
-
 package com.grindrplus.bridge
 
 import android.content.ComponentName
@@ -6,40 +5,60 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
+import android.os.Looper
 import com.grindrplus.BuildConfig
-import com.grindrplus.core.Logger
 import com.grindrplus.core.LogSource
+import com.grindrplus.core.Logger
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.resume
 
 class BridgeClient(private val context: Context) {
     private var bridgeService: IBridgeService? = null
     private val isConnecting = AtomicBoolean(false)
     private val isBound = AtomicBoolean(false)
-    private val coroutineScope = CoroutineScope(Dispatchers.IO)
-    private val connectionLatch = CountDownLatch(1)
+    private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val serviceWatchdog = Handler(Looper.getMainLooper())
+    private var lastConnectionAttempt = 0L
+    private var connectionDeferreds = mutableMapOf<String, CompletableDeferred<Boolean>>()
+
+    companion object {
+        const val CONNECTION_TIMEOUT_MS = 5000L
+        private const val WATCHDOG_CHECK_INTERVAL_MS = 30000L
+        private const val RECONNECT_DELAY_MS = 2000L
+    }
 
     init {
         Logger.initialize(context, this, false)
     }
-
-    fun getService(): IBridgeService? = bridgeService
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             bridgeService = IBridgeService.Stub.asInterface(binder)
             isBound.set(true)
             isConnecting.set(false)
-            connectionLatch.countDown()
+
+            connectionDeferreds.forEach { (_, deferred) ->
+                if (!deferred.isCompleted) deferred.complete(true)
+            }
+            connectionDeferreds.clear()
+
             Logger.i("Connected to bridge service", LogSource.BRIDGE)
         }
 
@@ -47,116 +66,214 @@ class BridgeClient(private val context: Context) {
             bridgeService = null
             isBound.set(false)
             Logger.i("Disconnected from bridge service", LogSource.BRIDGE)
-        }
-    }
 
-    fun connect(onConnected: (() -> Unit)? = null) {
-        if (isBound.get()) {
-            onConnected?.invoke()
-            return
-        }
-
-        if (isConnecting.getAndSet(true)) {
-            Logger.d("Connection already in progress", LogSource.BRIDGE)
-            return
-        }
-
-        startServiceMultipleWays()
-
-        val intent = Intent().apply {
-            setClassName(
-                BuildConfig.APPLICATION_ID,
-                "${BuildConfig.APPLICATION_ID}.bridge.BridgeService"
-            )
-        }
-
-        try {
-            bindServiceProperly(intent)
-        } catch (e: Exception) {
-            Logger.e("Error binding service: ${e.message}", LogSource.BRIDGE)
-            isConnecting.set(false)
-            return
-        }
-
-        coroutineScope.launch {
-            val connected = connectionLatch.await(5000, TimeUnit.MILLISECONDS)
-
-            if (connected) {
-                withContext(Dispatchers.Main) {
-                    onConnected?.invoke()
-                }
-            } else {
-                Logger.w("Connection timeout in async mode", LogSource.BRIDGE)
-                isConnecting.set(false)
+            if (!isConnecting.get()) {
+                mainHandler.postDelayed({
+                    if (!isBound.get() && !isConnecting.get()) {
+                        Logger.d("Auto-reconnecting after service disconnection", LogSource.BRIDGE)
+                        coroutineScope.launch {
+                            connect()
+                        }
+                    }
+                }, RECONNECT_DELAY_MS)
             }
         }
     }
 
-    fun connectBlocking(timeoutMs: Long = 10000): Boolean {
+    private val watchdogRunnable = object : Runnable {
+        override fun run() {
+            if (!isBound.get() && !isConnecting.get()) {
+                val now = System.currentTimeMillis()
+                if (now - lastConnectionAttempt > 5000) {
+                    Logger.w("Service watchdog detected disconnection, reconnecting...", LogSource.BRIDGE)
+                    coroutineScope.launch {
+                        connectWithRetry()
+                    }
+                }
+            }
+            serviceWatchdog.postDelayed(this, WATCHDOG_CHECK_INTERVAL_MS)
+        }
+    }
+
+    fun startWatchdog() {
+        serviceWatchdog.removeCallbacks(watchdogRunnable)
+        serviceWatchdog.postDelayed(watchdogRunnable, WATCHDOG_CHECK_INTERVAL_MS)
+        Logger.d("Started service watchdog", LogSource.BRIDGE)
+    }
+
+    fun stopWatchdog() {
+        serviceWatchdog.removeCallbacks(watchdogRunnable)
+        Logger.d("Stopped service watchdog", LogSource.BRIDGE)
+    }
+
+    fun getService(): IBridgeService? = bridgeService
+
+    suspend fun connectWithRetry(maxRetries: Int = 3, retryDelay: Long = 1000): Boolean {
+        var attempts = 0
+        var connected = false
+
+        while (!connected && attempts < maxRetries) {
+            attempts++
+            Logger.d("Connection attempt $attempts/$maxRetries", LogSource.BRIDGE)
+
+            connected = connect()
+
+            if (connected) {
+                Logger.i("Successfully connected on attempt $attempts", LogSource.BRIDGE)
+                return true
+            }
+
+            if (attempts < maxRetries) {
+                delay(retryDelay)
+            }
+        }
+
+        if (!connected) {
+            Logger.w("Failed to connect after $maxRetries attempts", LogSource.BRIDGE)
+        }
+
+        return connected
+    }
+
+    fun connectAsync(onConnected: ((Boolean) -> Unit)? = null) {
+        coroutineScope.launch {
+            val result = connect()
+            withContext(Dispatchers.Main) {
+                onConnected?.invoke(result)
+            }
+        }
+    }
+
+    suspend fun connect(): Boolean {
+        if (isBound.get()) {
+            return true
+        }
+
+        if (isConnecting.getAndSet(true)) {
+            Logger.d("Connection already in progress, waiting...", LogSource.BRIDGE)
+            val connectionKey = "connect-${System.currentTimeMillis()}"
+            val deferred = CompletableDeferred<Boolean>()
+            connectionDeferreds[connectionKey] = deferred
+
+            try {
+                return withTimeout(CONNECTION_TIMEOUT_MS) {
+                    deferred.await()
+                }
+            } catch (e: Exception) {
+                Logger.w("Timeout waiting for existing connection", LogSource.BRIDGE)
+                connectionDeferreds.remove(connectionKey)
+                return false
+            }
+        }
+
+        lastConnectionAttempt = System.currentTimeMillis()
+
+        try {
+            startService()
+        } catch (e: Exception) {
+            Logger.e("Failed to start service: ${e.message}", LogSource.BRIDGE)
+            isConnecting.set(false)
+            return false
+        }
+
+        val intent = Intent().apply {
+            setClassName(
+                BuildConfig.APPLICATION_ID,
+                BridgeService::class.java.name
+            )
+        }
+
+        return suspendCancellableCoroutine { continuation ->
+            val bindResult = try {
+                bindServiceSafely(intent)
+            } catch (e: Exception) {
+                Logger.e("Error binding service: ${e.message}", LogSource.BRIDGE)
+                isConnecting.set(false)
+                continuation.resume(false)
+                return@suspendCancellableCoroutine
+            }
+
+            if (!bindResult) {
+                Logger.w("bindService returned false", LogSource.BRIDGE)
+                isConnecting.set(false)
+                continuation.resume(false)
+                return@suspendCancellableCoroutine
+            }
+
+            val timeoutHandler = Handler(Looper.getMainLooper())
+            val timeoutOccurred = AtomicBoolean(false)
+
+            val timeoutRunnable = Runnable {
+                if (continuation.isActive && !timeoutOccurred.getAndSet(true)) {
+                    Logger.w("Connection timeout", LogSource.BRIDGE)
+                    try {
+                        context.unbindService(connection)
+                    } catch (e: Exception) {
+                        Logger.e("Error unbinding service after timeout: ${e.message}", LogSource.BRIDGE)
+                    }
+                    isConnecting.set(false)
+                    continuation.resume(false)
+                }
+            }
+
+            timeoutHandler.postDelayed(timeoutRunnable, CONNECTION_TIMEOUT_MS)
+
+            continuation.invokeOnCancellation {
+                timeoutHandler.removeCallbacks(timeoutRunnable)
+                try {
+                    context.unbindService(connection)
+                } catch (e: Exception) {
+                    Logger.e("Error unbinding service on cancellation: ${e.message}", LogSource.BRIDGE)
+                }
+                isConnecting.set(false)
+            }
+
+            val connectionKey = "connect-${continuation.hashCode()}"
+            val deferred = CompletableDeferred<Boolean>()
+            connectionDeferreds[connectionKey] = deferred
+
+            coroutineScope.launch {
+                val result = try {
+                    withTimeout(CONNECTION_TIMEOUT_MS) {
+                        deferred.await()
+                    }
+                } catch (_: Exception) {
+                    false
+                }
+
+                connectionDeferreds.remove(connectionKey)
+                timeoutHandler.removeCallbacks(timeoutRunnable)
+
+                if (continuation.isActive && !timeoutOccurred.get()) {
+                    continuation.resume(result)
+                }
+            }
+        }
+    }
+
+    fun connectBlocking(timeoutMs: Long = CONNECTION_TIMEOUT_MS): Boolean {
         if (isBound.get()) {
             return true
         }
 
         Logger.d("Attempting to connect to bridge service (blocking)", LogSource.BRIDGE)
 
-        if (isConnecting.getAndSet(true)) {
-            Logger.d("Connection already in progress, waiting...", LogSource.BRIDGE)
-            return connectionLatch.await(timeoutMs, TimeUnit.MILLISECONDS)
-        }
-
-        startServiceMultipleWays()
-
-        val intent = Intent().apply {
-            setClassName(
-                BuildConfig.APPLICATION_ID,
-                "${BuildConfig.APPLICATION_ID}.bridge.BridgeService"
-            )
-        }
-
-        try {
-            bindServiceProperly(intent)
-        } catch (e: Exception) {
-            Logger.e("Error binding service: ${e.message}", LogSource.BRIDGE)
-            isConnecting.set(false)
-            return false
-        }
-
-        val result = connectionLatch.await(timeoutMs, TimeUnit.MILLISECONDS)
-
-        if (!result) {
-            Logger.w("Connection timeout in blocking mode", LogSource.BRIDGE)
-            isConnecting.set(false)
+        val result = runBlocking {
+            try {
+                withTimeout(timeoutMs) {
+                    connect()
+                }
+            } catch (e: Exception) {
+                Logger.w("Connection timeout in blocking mode", LogSource.BRIDGE)
+                false
+            }
         }
 
         return result
     }
 
-    private fun startServiceMultipleWays() {
-        try {
-            val forceStartIntent = Intent().apply {
-                setClassName(
-                    BuildConfig.APPLICATION_ID,
-                    "${BuildConfig.APPLICATION_ID}.bridge.ForceStartActivity"
-                )
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(forceStartIntent)
-        } catch (e: Exception) {
-            Logger.w("Failed to start ForceStartActivity: ${e.message}", LogSource.BRIDGE)
-        }
-
-        try {
-            val broadcastIntent = Intent("com.grindrplus.START_BRIDGE_SERVICE").apply {
-                setPackage(BuildConfig.APPLICATION_ID)
-            }
-            context.sendBroadcast(broadcastIntent)
-        } catch (e: Exception) {
-            Logger.w("Failed to broadcast service start intent: ${e.message}", LogSource.BRIDGE)
-        }
-    }
-
-    private fun bindServiceProperly(intent: Intent) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+    private fun bindServiceSafely(intent: Intent): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             context.bindService(
                 intent,
                 Context.BIND_AUTO_CREATE,
@@ -164,7 +281,63 @@ class BridgeClient(private val context: Context) {
                 connection
             )
         } else {
-            context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+            try {
+                val handlerThread = HandlerThread("BridgeClientThread")
+                handlerThread.start()
+                val handler = Handler(handlerThread.looper)
+
+                val bindResult = try {
+                    val userHandle = Process::class.java.getMethod("myUserHandle").invoke(null)
+                    context.javaClass.getMethod(
+                        "bindServiceAsUser",
+                        Intent::class.java,
+                        ServiceConnection::class.java,
+                        Int::class.javaPrimitiveType,
+                        Handler::class.java,
+                        userHandle.javaClass
+                    ).invoke(
+                        context,
+                        intent,
+                        connection,
+                        Context.BIND_AUTO_CREATE,
+                        handler,
+                        userHandle
+                    ) as Boolean
+                } catch (e: Exception) {
+                    Logger.w("bindServiceAsUser failed, falling back to bindService: ${e.message}", LogSource.BRIDGE)
+                    context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+                }
+
+                bindResult
+            } catch (e: Exception) {
+                Logger.e("Failed to bind service with any method: ${e.message}", LogSource.BRIDGE)
+                context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+            }
+        }
+    }
+
+    private fun startService() {
+        try {
+            val forceStartIntent = ForceStartActivity.createIntent(context)
+            context.startActivity(forceStartIntent)
+            Logger.d("Service start attempt via ForceStartActivity", LogSource.BRIDGE)
+            Thread.sleep(50)
+        } catch (e: Exception) {
+            Logger.w("Failed to start via ForceStartActivity: ${e.message}", LogSource.BRIDGE)
+
+            try {
+                val serviceIntent = Intent().apply {
+                    setClassName(
+                        BuildConfig.APPLICATION_ID,
+                        "${BuildConfig.APPLICATION_ID}.bridge.BridgeService"
+                    )
+                }
+                context.startService(serviceIntent)
+                Logger.d("Service start attempt via startService (fallback)", LogSource.BRIDGE)
+            } catch (e: Exception) {
+                Logger.e("Failed to start service using any method: ${e.message}", LogSource.BRIDGE)
+                throw e
+            }
         }
     }
 
@@ -181,8 +354,12 @@ class BridgeClient(private val context: Context) {
 
     fun getConfig(): JSONObject {
         if (!isBound.get()) {
-            Logger.w("Cannot get config, service not bound", LogSource.BRIDGE)
-            return JSONObject()
+            if (connectBlocking(3000)) {
+                Logger.d("Connected to service on-demand for getConfig", LogSource.BRIDGE)
+            } else {
+                Logger.w("Cannot get config, service not bound", LogSource.BRIDGE)
+                return JSONObject()
+            }
         }
 
         return try {
@@ -195,8 +372,12 @@ class BridgeClient(private val context: Context) {
 
     fun setConfig(config: JSONObject) {
         if (!isBound.get()) {
-            Logger.w("Cannot set config, service not bound", LogSource.BRIDGE)
-            return
+            if (connectBlocking(3000)) {
+                Logger.d("Connected to service on-demand for setConfig", LogSource.BRIDGE)
+            } else {
+                Logger.w("Cannot set config, service not bound", LogSource.BRIDGE)
+                return
+            }
         }
 
         try {
@@ -208,8 +389,12 @@ class BridgeClient(private val context: Context) {
 
     fun logBlockEvent(profileId: String, displayName: String, isBlock: Boolean, packageName: String) {
         if (!isBound.get()) {
-            Logger.w("Cannot log block event, service not bound", LogSource.BRIDGE)
-            return
+            if (connectBlocking(3000)) {
+                Logger.d("Connected to service on-demand for logBlockEvent", LogSource.BRIDGE)
+            } else {
+                Logger.w("Cannot log block event, service not bound", LogSource.BRIDGE)
+                return
+            }
         }
 
         try {
@@ -221,8 +406,12 @@ class BridgeClient(private val context: Context) {
 
     fun getBlockEvents(): JSONArray {
         if (!isBound.get()) {
-            Logger.w("Cannot get block events, service not bound", LogSource.BRIDGE)
-            return JSONArray()
+            if (connectBlocking(3000)) {
+                Logger.d("Connected to service on-demand for getBlockEvents", LogSource.BRIDGE)
+            } else {
+                Logger.w("Cannot get block events, service not bound", LogSource.BRIDGE)
+                return JSONArray()
+            }
         }
 
         return try {
@@ -235,8 +424,12 @@ class BridgeClient(private val context: Context) {
 
     fun clearBlockEvents() {
         if (!isBound.get()) {
-            Logger.w("Cannot clear block events, service not bound", LogSource.BRIDGE)
-            return
+            if (connectBlocking(3000)) {
+                Logger.d("Connected to service on-demand for clearBlockEvents", LogSource.BRIDGE)
+            } else {
+                Logger.w("Cannot clear block events, service not bound", LogSource.BRIDGE)
+                return
+            }
         }
 
         try {
@@ -255,8 +448,12 @@ class BridgeClient(private val context: Context) {
         channelDescription: String = "Default notifications"
     ) {
         if (!isBound.get()) {
-            Logger.w("Cannot send notification, service not bound", LogSource.BRIDGE)
-            return
+            if (connectBlocking(3000)) {
+                Logger.d("Connected to service on-demand for sendNotification", LogSource.BRIDGE)
+            } else {
+                Logger.w("Cannot send notification, service not bound", LogSource.BRIDGE)
+                return
+            }
         }
 
         try {
@@ -285,8 +482,12 @@ class BridgeClient(private val context: Context) {
         channelDescription: String = "Default notifications"
     ) {
         if (!isBound.get()) {
-            Logger.w("Cannot send notification, service not bound", LogSource.BRIDGE)
-            return
+            if (connectBlocking(3000)) {
+                Logger.d("Connected to service on-demand for sendNotificationWithActions", LogSource.BRIDGE)
+            } else {
+                Logger.w("Cannot send notification, service not bound", LogSource.BRIDGE)
+                return
+            }
         }
 
         try {
@@ -303,6 +504,23 @@ class BridgeClient(private val context: Context) {
             )
         } catch (e: Exception) {
             Logger.e("Error sending notification with multiple actions: ${e.message}", LogSource.BRIDGE)
+        }
+    }
+}
+
+private fun <T> runBlocking(block: suspend () -> T): T {
+    return java.util.concurrent.CompletableFuture<T>().let { future ->
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                future.complete(block())
+            } catch (e: Exception) {
+                future.completeExceptionally(e)
+            }
+        }
+        try {
+            future.get(BridgeClient.CONNECTION_TIMEOUT_MS + 1000, TimeUnit.MILLISECONDS)
+        } catch (e: Exception) {
+            throw e.cause ?: e
         }
     }
 }

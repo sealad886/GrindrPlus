@@ -1,21 +1,22 @@
 package com.grindrplus.hooks
 
-import com.grindrplus.core.Utils.createServiceProxy
 import com.grindrplus.utils.Hook
 import com.grindrplus.utils.HookStage
+import com.grindrplus.utils.RetrofitUtils.RETROFIT_NAME
+import com.grindrplus.utils.RetrofitUtils.createServiceProxy
 import com.grindrplus.utils.hook
 
 class DisableAnalytics : Hook(
     "Disable analytics",
     "Disable Grindr analytics (data collection)"
 ) {
-    private val analyticsRestService = "R5.a" // search for 'v1/telemetry'
+    private val analyticsRestService = "Y5.a" // search for 'v1/telemetry'
 
     override fun init() {
         val analyticsRestServiceClass = findClass(analyticsRestService)
 
         // First party analytics
-        findClass("retrofit2.Retrofit")
+        findClass(RETROFIT_NAME)
             .hook("create", HookStage.AFTER) { param ->
                 val service = param.getResult()
                 if (service != null && analyticsRestServiceClass.isAssignableFrom(service.javaClass)) {

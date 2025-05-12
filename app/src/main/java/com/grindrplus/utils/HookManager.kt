@@ -5,6 +5,7 @@ import com.grindrplus.core.Logger
 import com.grindrplus.hooks.AllowScreenshots
 import com.grindrplus.hooks.AntiBlock
 import com.grindrplus.hooks.AntiDetection
+import com.grindrplus.hooks.BanManagement
 import com.grindrplus.hooks.ChatIndicators
 import com.grindrplus.hooks.ChatTerminal
 import com.grindrplus.hooks.DisableAnalytics
@@ -13,18 +14,18 @@ import com.grindrplus.hooks.DisableShuffle
 import com.grindrplus.hooks.DisableUpdates
 import com.grindrplus.hooks.EmptyCalls
 import com.grindrplus.hooks.EnableUnlimited
-import com.grindrplus.hooks.ExpiringPhotos
+import com.grindrplus.hooks.ExpiringMedia
 import com.grindrplus.hooks.Favorites
 import com.grindrplus.hooks.FeatureGranting
 import com.grindrplus.hooks.LocalSavedPhrases
 import com.grindrplus.hooks.LocationSpoofer
-import com.grindrplus.hooks.ModSettings
 import com.grindrplus.hooks.NotificationAlerts
 import com.grindrplus.hooks.OnlineIndicator
 import com.grindrplus.hooks.ProfileDetails
 import com.grindrplus.hooks.ProfileViews
 import com.grindrplus.hooks.QuickBlock
 import com.grindrplus.hooks.TimberLogging
+import com.grindrplus.hooks.UnlimitedAlbums
 import com.grindrplus.hooks.UnlimitedProfiles
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -36,10 +37,10 @@ class HookManager {
     fun registerHooks(init: Boolean = true) {
         runBlocking(Dispatchers.IO) {
             val hookList = listOf(
+                TimberLogging(),
+                BanManagement(),
                 FeatureGranting(),
                 EnableUnlimited(),
-                // TimberLogging(),
-                // PersistentIncognito(),
                 AntiDetection(),
                 AntiBlock(),
                 NotificationAlerts(),
@@ -50,19 +51,17 @@ class HookManager {
                 ChatIndicators(),
                 ChatTerminal(),
                 DisableAnalytics(),
-                ExpiringPhotos(),
+                ExpiringMedia(),
                 Favorites(),
                 LocalSavedPhrases(),
                 LocationSpoofer(),
-                ModSettings(),
                 OnlineIndicator(),
                 UnlimitedProfiles(),
                 ProfileDetails(),
                 ProfileViews(),
-                // UnlimitedAlbums(),
                 QuickBlock(),
                 EmptyCalls(),
-                // ReverseRadarTabs()
+                UnlimitedAlbums()
             )
 
             hookList.forEach { hook ->

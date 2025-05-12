@@ -12,6 +12,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.grindrplus.core.Config
+import com.grindrplus.manager.DATA_URL
+import com.grindrplus.manager.settings.SettingsUtils.testMapsApiKey
 import com.grindrplus.manager.utils.AppIconManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -28,6 +30,38 @@ class SettingsViewModel(
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading
 
+    private val _showApiKeyTestDialog = MutableStateFlow(false)
+    val showApiKeyTestDialog: StateFlow<Boolean> = _showApiKeyTestDialog
+
+    private val _apiKeyTestTitle = MutableStateFlow("")
+    val apiKeyTestTitle: StateFlow<String> = _apiKeyTestTitle
+
+    private val _apiKeyTestMessage = MutableStateFlow("")
+    val apiKeyTestMessage: StateFlow<String> = _apiKeyTestMessage
+
+    private val _apiKeyTestRawResponse = MutableStateFlow("")
+    val apiKeyTestRawResponse: StateFlow<String> = _apiKeyTestRawResponse
+
+    private val _apiKeyTestLoading = MutableStateFlow(false)
+    val apiKeyTestLoading: StateFlow<Boolean> = _apiKeyTestLoading
+
+    fun dismissApiKeyTestDialog() {
+        _showApiKeyTestDialog.value = false
+    }
+
+    private fun showApiKeyTestDialog(
+        isLoading: Boolean,
+        title: String,
+        message: String,
+        rawResponse: String
+    ) {
+        _apiKeyTestLoading.value = isLoading
+        _apiKeyTestTitle.value = title
+        _apiKeyTestMessage.value = message
+        _apiKeyTestRawResponse.value = rawResponse
+        _showApiKeyTestDialog.value = true
+    }
+
     init {
         loadSettings()
     }
@@ -38,11 +72,7 @@ class SettingsViewModel(
 
             try {
                 val hooks = Config.getHooksSettings()
-                val hookSettings = hooks.filter {
-                    it.key != "Mod settings" &&
-                            it.key != "Persistent incognito" &&
-                            it.key != "Unlimited albums"
-                }.map { (hookName, pair) ->
+                val hookSettings = hooks.map { (hookName, pair) ->
                     SwitchSetting(
                         id = hookName,
                         title = hookName,
@@ -57,7 +87,23 @@ class SettingsViewModel(
                     )
                 }
 
-                val otherSettings = listOf(
+                val tasks = Config.getTasksSettings()
+                val taskSettings = tasks.map { (taskId, pair) ->
+                    SwitchSetting(
+                        id = taskId,
+                        title = taskId,
+                        description = pair.first,
+                        isChecked = pair.second,
+                        onCheckedChange = {
+                            viewModelScope.launch {
+                                Config.setTaskEnabled(taskId, it)
+                                loadSettings()
+                            }
+                        }
+                    )
+                }
+
+                val otherSettings = mutableListOf(
                     TextSetting(
                         id = "command_prefix",
                         title = "Command Prefix",
@@ -117,6 +163,66 @@ class SettingsViewModel(
                             if (value == null || value <= 0) "Duration must be a positive number" else null
                         }
                     ),
+                    TextSetting(
+                        id = "favorites_grid_columns",
+                        title = "Favorites grid columns",
+                        description = "Number of columns in the favorites grid (default: 3)",
+                        value = Config.get("favorites_grid_columns", 3).toString(),
+                        onValueChange = {
+                            val value = it.toIntOrNull() ?: 3
+                            viewModelScope.launch {
+                                Config.put("favorites_grid_columns", value)
+                                loadSettings()
+                            }
+                        },
+                        keyboardType = KeyboardType.Number,
+                        validator = { input ->
+                            val value = input.toIntOrNull()
+                            if (value == null || value <= 0) "Number of columns must be a positive number" else null
+                        }
+                    ),
+                    TextSettingWithButtons(
+                        id = "android_device_id",
+                        title = "Android Device ID",
+                        description = "Change the Android Device ID",
+                        value = Config.get("android_device_id", "") as String,
+                        onValueChange = {
+                            viewModelScope.launch {
+                                Config.put("android_device_id", it)
+                                loadSettings()
+                            }
+                        },
+                        validator = { input ->
+                            when {
+                                input.isBlank() -> null
+                                input.length != 16 -> "Android Device ID must be 16 characters long"
+                                !input.matches(Regex("[0-9a-fA-F]+")) -> "Android Device ID must be a hexadecimal string"
+                                else -> null
+                            }
+                        },
+                        buttons = listOf(
+                            ButtonAction("Generate") {
+                                val uuid = java.util.UUID.randomUUID()
+                                val newDeviceId = uuid.toString().replace("-", "").substring(0, 16)
+                                Config.put("android_device_id", newDeviceId)
+                                loadSettings()
+                                Toast.makeText(context, "New device ID generated", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+
+                    ),
+                    SwitchSetting(
+                        id = "enable_albums_spank_bank",
+                        title = "Enable Albums Spank Bank",
+                        description = "Enable the new Albums section",
+                        isChecked = Config.get("enable_albums_spank_bank", false) as Boolean,
+                        onCheckedChange = {
+                            viewModelScope.launch {
+                                Config.put("enable_albums_spank_bank", it)
+                                loadSettings()
+                            }
+                        }
+                    ),
                     SwitchSetting(
                         id = "enable_interest_section",
                         title = "Enable Interest Section",
@@ -125,6 +231,18 @@ class SettingsViewModel(
                         onCheckedChange = {
                             viewModelScope.launch {
                                 Config.put("enable_interest_section", it)
+                                loadSettings()
+                            }
+                        }
+                    ),
+                    SwitchSetting(
+                        id = "disable_profile_swipe",
+                        title = "Disable profile swipe",
+                        description = "Disable profile swipe and open profile on click",
+                        isChecked = Config.get("disable_profile_swipe", false) as Boolean,
+                        onCheckedChange = {
+                            viewModelScope.launch {
+                                Config.put("disable_profile_swipe", it)
                                 loadSettings()
                             }
                         }
@@ -164,10 +282,63 @@ class SettingsViewModel(
                                 loadSettings()
                             }
                         }
+                    ),
+                    SwitchSetting(
+                        id = "do_gui_safety_checks",
+                        title = "Do GUI safety checks",
+                        description = "Prevent graphic glitches when applying GUI based hooks",
+                        isChecked = Config.get("do_gui_safety_checks", true) as Boolean,
+                        onCheckedChange = {
+                            viewModelScope.launch {
+                                Config.put("do_gui_safety_checks", it)
+                                loadSettings()
+                            }
+                        }
                     )
                 )
 
                 val managerSettings = mutableListOf<Setting>(
+                    TextSettingWithButtons(
+                        id = "maps_api_key",
+                        title = "Maps API Key",
+                        description = "Use a custom Maps API Key when using Grindr Plus with LSPatch",
+                        value = Config.get("maps_api_key", "") as String,
+                        onValueChange = {
+                            viewModelScope.launch {
+                                Config.put("maps_api_key", it)
+                                loadSettings()
+                            }
+                        },
+                        validator = { null },
+                        buttons = listOf(
+                            ButtonAction("Test") {
+                                val apiKey = Config.get("maps_api_key", "") as String
+                                if (apiKey.isBlank()) {
+                                    Toast.makeText(context, "Please enter an API key first", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    testMapsApiKey(
+                                        context,
+                                        viewModelScope,
+                                        apiKey,
+                                        ::showApiKeyTestDialog
+                                    )
+                                }
+                            }
+                        )
+                    ),
+                    TextSetting(
+                        id = "custom_manifest",
+                        title = "Custom Manifest URL",
+                        description = "Use a custom manifest URL when using Grindr Plus with LSPatch",
+                        value = Config.get("custom_manifest", DATA_URL) as String,
+                        onValueChange = {
+                            viewModelScope.launch {
+                                Config.put("custom_manifest", it)
+                                loadSettings()
+                            }
+                        },
+                        validator = { null }
+                    ),
                     SwitchSetting(
                         id = "analytics",
                         title = "Opt-in analytics",
@@ -200,6 +371,18 @@ class SettingsViewModel(
                                 ).show()
                             }
                         }
+                    ),
+                    SwitchSetting(
+                        id = "disable_permission_checks",
+                        title = "Disable permission checks",
+                        description = "Disable permission checks on startup (not recommended)",
+                        isChecked = Config.get("disable_permission_checks", false) as Boolean,
+                        onCheckedChange = {
+                            viewModelScope.launch {
+                                Config.put("disable_permission_checks", it)
+                                loadSettings()
+                            }
+                        }
                     )
                 )
 
@@ -223,6 +406,11 @@ class SettingsViewModel(
                         id = "hooks",
                         title = "Manage Hooks",
                         settings = hookSettings
+                    ),
+                    SettingGroup(
+                        id = "tasks",
+                        title = "Manage Tasks",
+                        settings = taskSettings
                     ),
                     SettingGroup(
                         id = "other",
