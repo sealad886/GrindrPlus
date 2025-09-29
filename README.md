@@ -170,6 +170,13 @@ Each installation method is completely different and comes with its own challeng
 
 ## FAQ & Troubleshooting
 <details>
+  <summary>Is iOS supported? Can GrindrPlus be ported to iOS?</summary>
+
+- No, iOS is not supported and porting is not technically feasible. Despite the EU Digital Markets Act enabling sideloading and alternative app stores, iOS's fundamental security architecture prevents GrindrPlus from functioning.
+- The core features of GrindrPlus require deep system integration, method hooking, and inter-app modification that iOS's sandboxing, code signing, and system integrity protection make impossible.
+- See our comprehensive [iOS Porting Feasibility Analysis](iOS_Porting_Feasibility_Analysis.md) for detailed technical analysis.
+</details>
+<details>
   <summary>How do I login with Google?</summary>
 
 - If you're not using LSPosed you might have noticed that the Google Login button doesn't work. This is because the original signature of the application is invalidated when using LSPatch, which causes all functions related to Google Services (GMS) to not work properly.
@@ -256,6 +263,14 @@ This project relies on several third-party libraries, and we extend our gratitud
 Parts of the manager were coded with the help of [Vendetta's Manager](https://github.com/vendetta-mod/VendettaManager).
 
 I would also like to give special recognition to [@rhunk](https://github.com/rhunk) and the other developers of [SE](https://github.com/rhunk/SnapEnhance). Their work has been very useful for this mod, and some portions of their code have been used here.
+
+## Platform Support
+
+### Android
+GrindrPlus is fully supported on Android devices using LSPosed or LSPatch.
+
+### iOS
+**iOS is not supported and porting is not technically feasible.** Despite the EU Digital Markets Act enabling sideloading, iOS's security architecture (sandboxing, code signing, system integrity protection) prevents the core functionality that GrindrPlus requires. See the comprehensive [iOS Porting Feasibility Analysis](iOS_Porting_Feasibility_Analysis.md) for detailed technical reasoning.
 
 ## Contributing
 This project is open to any kind of contribution. Feel free to [open a pull request](https://github.com/R0rt1z2/GrindrPlus/pulls) or [submit an issue](https://github.com/R0rt1z2/GrindrPlus/issues)! [Discussions section](https://github.com/R0rt1z2/GrindrPlus/discussions) also available!
