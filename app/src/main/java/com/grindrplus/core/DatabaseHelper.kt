@@ -7,20 +7,41 @@ import android.database.sqlite.SQLiteDatabase
 import com.grindrplus.GrindrPlus
 
 object DatabaseHelper {
+    @Volatile
+    private var cachedDb: SQLiteDatabase? = null
+    @Volatile
+    private var cachedDbName: String? = null
+    private val lock = Any()
+
     private fun getDatabase(): SQLiteDatabase {
-        val context = GrindrPlus.context
-        val databases = context.databaseList()
-        val grindrUserDb = databases.firstOrNull {
-            it.contains("grindr_user") && it.endsWith(".db") }
-            ?: throw IllegalStateException("No Grindr user database found!").also {
-                Logger.apply {
-                    e(it.message!!)
-                    writeRaw("Available databases:\n" +
-                            "${databases.joinToString("\n") { "  $it" }}\n")
+        cachedDb?.let { if (it.isOpen) return it }
+
+        synchronized(lock) {
+            cachedDb?.let { if (it.isOpen) return it }
+
+            val context = GrindrPlus.context
+            val dbName = cachedDbName ?: run {
+                val databases = context.databaseList()
+                val name = databases.firstOrNull {
+                    it.contains("grindr_user") && it.endsWith(".db")
+                } ?: throw IllegalStateException("No Grindr user database found!").also {
+                    Logger.apply {
+                        e(it.message!!)
+                        writeRaw(
+                            "Available databases:\n" +
+                                    "${databases.joinToString("\n") { "  $it" }}\n"
+                        )
+                    }
                 }
+                cachedDbName = name
+                Logger.d("Using database: $name")
+                name
             }
-        return context.openOrCreateDatabase(grindrUserDb.also {
-            Logger.d("Using database: $it") }, Context.MODE_PRIVATE, null)
+
+            val db = context.openOrCreateDatabase(dbName, Context.MODE_PRIVATE, null)
+            cachedDb = db
+            return db
+        }
     }
 
     fun query(query: String, args: Array<String>? = null): List<Map<String, Any>> {
@@ -29,15 +50,19 @@ object DatabaseHelper {
         val results = mutableListOf<Map<String, Any>>()
 
         try {
+            val columnIndices = mutableMapOf<String, Int>()
             if (cursor.moveToFirst()) {
+                cursor.columnNames.forEach { column ->
+                    columnIndices[column] = cursor.getColumnIndexOrThrow(column)
+                }
                 do {
                     val row = mutableMapOf<String, Any>()
-                    cursor.columnNames.forEach { column ->
-                        row[column] = when (cursor.getType(cursor.getColumnIndexOrThrow(column))) {
-                            Cursor.FIELD_TYPE_INTEGER -> cursor.getInt(cursor.getColumnIndexOrThrow(column))
-                            Cursor.FIELD_TYPE_FLOAT -> cursor.getFloat(cursor.getColumnIndexOrThrow(column))
-                            Cursor.FIELD_TYPE_STRING -> cursor.getString(cursor.getColumnIndexOrThrow(column))
-                            Cursor.FIELD_TYPE_BLOB -> cursor.getBlob(cursor.getColumnIndexOrThrow(column))
+                    for ((column, idx) in columnIndices) {
+                        row[column] = when (cursor.getType(idx)) {
+                            Cursor.FIELD_TYPE_INTEGER -> cursor.getLong(idx)
+                            Cursor.FIELD_TYPE_FLOAT -> cursor.getFloat(idx)
+                            Cursor.FIELD_TYPE_STRING -> cursor.getString(idx)
+                            Cursor.FIELD_TYPE_BLOB -> cursor.getBlob(idx)
                             Cursor.FIELD_TYPE_NULL -> "NULL"
                             else -> "UNKNOWN"
                         }
@@ -47,7 +72,6 @@ object DatabaseHelper {
             }
         } finally {
             cursor.close()
-            database.close()
         }
 
         return results
@@ -55,28 +79,21 @@ object DatabaseHelper {
 
     fun insert(table: String, values: ContentValues): Long {
         val database = getDatabase()
-        val rowId = database.insert(table, null, values)
-        database.close()
-        return rowId
+        return database.insert(table, null, values)
     }
 
     fun update(table: String, values: ContentValues, whereClause: String?, whereArgs: Array<String>?): Int {
         val database = getDatabase()
-        val rowsAffected = database.update(table, values, whereClause, whereArgs)
-        database.close()
-        return rowsAffected
+        return database.update(table, values, whereClause, whereArgs)
     }
 
     fun delete(table: String, whereClause: String?, whereArgs: Array<String>?): Int {
         val database = getDatabase()
-        val rowsDeleted = database.delete(table, whereClause, whereArgs)
-        database.close()
-        return rowsDeleted
+        return database.delete(table, whereClause, whereArgs)
     }
 
     fun execute(sql: String) {
         val database = getDatabase()
         database.execSQL(sql)
-        database.close()
     }
 }

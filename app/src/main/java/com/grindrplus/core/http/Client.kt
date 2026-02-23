@@ -85,7 +85,7 @@ class Client(interceptor: Interceptor) {
             }
         }
         GrindrPlus.executeAsync {
-            Thread.sleep(500) // Wait for WS to reply
+            kotlinx.coroutines.delay(500)
             GrindrPlus.shouldTriggerAntiblock = true
         }
     }
@@ -122,7 +122,7 @@ class Client(interceptor: Interceptor) {
             }
         }
         GrindrPlus.executeAsync {
-            Thread.sleep(500) // Wait for WS to reply
+            kotlinx.coroutines.delay(500)
             GrindrPlus.shouldTriggerAntiblock = true
         }
     }

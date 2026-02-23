@@ -14,6 +14,7 @@ import com.grindrplus.utils.hook
 import com.grindrplus.utils.hookConstructor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
@@ -39,8 +40,10 @@ class AntiBlock : Hook(
         // search for '.setValue(new DialogMessage(116, null, 2, null));'
         findClass(individualUnblockActivityViewModel)
             .hook("T", HookStage.AFTER) { param ->
-                Thread.sleep(700) // Wait for WS to unblock
-                GrindrPlus.shouldTriggerAntiblock = true
+                scope.launch {
+                    delay(700)
+                    GrindrPlus.shouldTriggerAntiblock = true
+                }
             }
 
         if (Config.get("force_old_anti_block_behavior", false) as Boolean) {
@@ -68,9 +71,11 @@ class AntiBlock : Hook(
                     // Do we expect another invocation with number > 0 ?
 
                     logd("Request to delete $numberOfChatsToDelete chats")
-                    Thread.sleep((300 * numberOfChatsToDelete).toLong()) // FIXME
-                    GrindrPlus.shouldTriggerAntiblock = true
-                    GrindrPlus.blockCaller = ""
+                    scope.launch {
+                        delay((300L * numberOfChatsToDelete).coerceAtMost(5000L))
+                        GrindrPlus.shouldTriggerAntiblock = true
+                        GrindrPlus.blockCaller = ""
+                    }
                 }
 
             // search for 'Deleting conversations'

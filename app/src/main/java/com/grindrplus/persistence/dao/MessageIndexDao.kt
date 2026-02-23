@@ -79,7 +79,9 @@ interface MessageIndexDao {
     @Transaction
     suspend fun rebuildIndex(messages: List<IndexedMessageEntity>) {
         deleteAll()
-        upsertMessages(messages)
+        for (chunk in messages.chunked(500)) {
+            upsertMessages(chunk)
+        }
         upsertMetadata(
             IndexMetadataEntity(
                 key = "last_reindex",
