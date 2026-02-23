@@ -78,7 +78,7 @@ class LocalSavedPhrases : Hook(
 
                     runBlocking {
                         val index = getCurrentPhraseIndex() + 1
-                        addPhrase(index, phrase, 0, System.currentTimeMillis())
+                        upsertPhrase(index, phrase, 0, System.currentTimeMillis())
                         logs("Phrase saved locally with ID: $index")
 
                         val response = savedPhraseConstructor?.newInstance(index.toString())
@@ -106,7 +106,7 @@ class LocalSavedPhrases : Hook(
                         val index = id.toLongOrNull() ?: 0L
                         val phrase = getPhrase(index)
                         if (phrase != null) {
-                            updatePhrase(
+                            upsertPhrase(
                                 index,
                                 phrase.text,
                                 phrase.frequency + 1,
@@ -169,17 +169,7 @@ class LocalSavedPhrases : Hook(
         return@withContext GrindrPlus.database.savedPhraseDao().getCurrentPhraseIndex() ?: 0L
     }
 
-    private suspend fun addPhrase(phraseId: Long, text: String, frequency: Int, timestamp: Long) = withContext(Dispatchers.IO) {
-        val phrase = SavedPhraseEntity(
-            phraseId = phraseId,
-            text = text,
-            frequency = frequency,
-            timestamp = timestamp
-        )
-        GrindrPlus.database.savedPhraseDao().upsertPhrase(phrase)
-    }
-
-    private suspend fun updatePhrase(phraseId: Long, text: String, frequency: Int, timestamp: Long) = withContext(Dispatchers.IO) {
+    private suspend fun upsertPhrase(phraseId: Long, text: String, frequency: Int, timestamp: Long) = withContext(Dispatchers.IO) {
         val phrase = SavedPhraseEntity(
             phraseId = phraseId,
             text = text,

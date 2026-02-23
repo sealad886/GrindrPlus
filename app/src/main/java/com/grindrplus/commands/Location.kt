@@ -147,14 +147,9 @@ class Location(recipient: String, sender: String) : CommandModule("Location", re
                         val lon = coordinates[1].toDouble()
 
                         val existingLocation = getLocation(name)
-
-                        if (existingLocation != null) {
-                            updateLocation(name, lat, lon)
-                            GrindrPlus.showToast(Toast.LENGTH_LONG, "Successfully updated $name")
-                        } else {
-                            addLocation(name, lat, lon)
-                            GrindrPlus.showToast(Toast.LENGTH_LONG, "Successfully saved $name")
-                        }
+                        saveLocation(name, lat, lon)
+                        val verb = if (existingLocation != null) "updated" else "saved"
+                        GrindrPlus.showToast(Toast.LENGTH_LONG, "Successfully $verb $name")
                     } catch (e: Exception) {
                         GrindrPlus.showToast(Toast.LENGTH_LONG, "Invalid coordinates format")
                     }
@@ -194,19 +189,7 @@ class Location(recipient: String, sender: String) : CommandModule("Location", re
             return@withContext entity?.let { Pair(it.latitude, it.longitude) }
         }
 
-    private suspend fun addLocation(name: String, latitude: Double, longitude: Double) =
-        withContext(Dispatchers.IO) {
-            val locationDao = GrindrPlus.database.teleportLocationDao()
-            val entity =
-                TeleportLocationEntity(
-                    name = name,
-                    latitude = latitude,
-                    longitude = longitude
-                )
-            locationDao.upsertLocation(entity)
-        }
-
-    private suspend fun updateLocation(name: String, latitude: Double, longitude: Double) =
+    private suspend fun saveLocation(name: String, latitude: Double, longitude: Double) =
         withContext(Dispatchers.IO) {
             val locationDao = GrindrPlus.database.teleportLocationDao()
             val entity =

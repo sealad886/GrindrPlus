@@ -1,17 +1,12 @@
 package com.grindrplus.commands
 
 import android.app.AlertDialog
-import android.graphics.Color
-import android.graphics.Typeface
-import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.Toast
-import androidx.appcompat.widget.AppCompatTextView
 import com.grindrplus.GrindrPlus
 import com.grindrplus.core.Logger
 import com.grindrplus.core.LogSource
 import com.grindrplus.hooks.MessageIndexer
-import com.grindrplus.ui.Utils.copyToClipboard
+import com.grindrplus.persistence.model.IndexedMessageEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -23,6 +18,15 @@ class Search(
 ) : CommandModule("Search", recipient, sender) {
 
     private val coroutineScope = CoroutineScope(Dispatchers.Main)
+
+    private fun formatSearchResults(results: List<IndexedMessageEntity>): String {
+        return results.mapIndexed { index, msg ->
+            val time = java.text.SimpleDateFormat(
+                "yyyy-MM-dd HH:mm", java.util.Locale.US
+            ).format(java.util.Date(msg.timestamp))
+            "${index + 1}. [$time] ${msg.sender}: ${msg.body.take(100)}${if (msg.body.length > 100) "..." else ""}"
+        }.joinToString("\n\n")
+    }
 
     @Command("search", aliases = ["s", "find"], help = "Search indexed messages (usage: search <query>)")
     fun search(args: List<String>) {
@@ -43,37 +47,13 @@ class Search(
                     return@launch
                 }
 
-                val resultText = results.mapIndexed { index, msg ->
-                    val time = java.text.SimpleDateFormat(
-                        "yyyy-MM-dd HH:mm", java.util.Locale.US
-                    ).format(java.util.Date(msg.timestamp))
-                    "${index + 1}. [$time] ${msg.sender}: ${msg.body.take(100)}${if (msg.body.length > 100) "..." else ""}"
-                }.joinToString("\n\n")
-
-                GrindrPlus.runOnMainThreadWithCurrentActivity { activity ->
-                    val scrollView = ScrollView(activity).apply {
-                        setPadding(60, 40, 60, 40)
-                    }
-
-                    val textView = AppCompatTextView(activity).apply {
-                        text = resultText
-                        textSize = 13f
-                        setTextColor(Color.WHITE)
-                        setPadding(20, 20, 20, 20)
-                    }
-
-                    scrollView.addView(textView)
-
-                    AlertDialog.Builder(activity)
-                        .setTitle("Search results (${results.size})")
-                        .setView(scrollView)
-                        .setPositiveButton("Close") { dialog, _ -> dialog.dismiss() }
-                        .setNegativeButton("Copy") { _, _ ->
-                            copyToClipboard("Search Results", resultText)
-                        }
-                        .create()
-                        .show()
-                }
+                CommandDialogs.showTextDialog(
+                    title = "Search results (${results.size})",
+                    content = formatSearchResults(results),
+                    copyLabel = "Search Results",
+                    scrollable = true,
+                    textSize = 13f
+                )
             } catch (e: Exception) {
                 Logger.e("Search failed: ${e.message}", LogSource.MODULE)
                 GrindrPlus.showToast(Toast.LENGTH_LONG, "Search error: ${e.message}")
@@ -103,37 +83,13 @@ class Search(
                     return@launch
                 }
 
-                val resultText = results.mapIndexed { index, msg ->
-                    val time = java.text.SimpleDateFormat(
-                        "yyyy-MM-dd HH:mm", java.util.Locale.US
-                    ).format(java.util.Date(msg.timestamp))
-                    "${index + 1}. [$time] ${msg.sender}: ${msg.body.take(100)}${if (msg.body.length > 100) "..." else ""}"
-                }.joinToString("\n\n")
-
-                GrindrPlus.runOnMainThreadWithCurrentActivity { activity ->
-                    val scrollView = ScrollView(activity).apply {
-                        setPadding(60, 40, 60, 40)
-                    }
-
-                    val textView = AppCompatTextView(activity).apply {
-                        text = resultText
-                        textSize = 13f
-                        setTextColor(Color.WHITE)
-                        setPadding(20, 20, 20, 20)
-                    }
-
-                    scrollView.addView(textView)
-
-                    AlertDialog.Builder(activity)
-                        .setTitle("Chat search (${results.size})")
-                        .setView(scrollView)
-                        .setPositiveButton("Close") { dialog, _ -> dialog.dismiss() }
-                        .setNegativeButton("Copy") { _, _ ->
-                            copyToClipboard("Chat Search Results", resultText)
-                        }
-                        .create()
-                        .show()
-                }
+                CommandDialogs.showTextDialog(
+                    title = "Chat search (${results.size})",
+                    content = formatSearchResults(results),
+                    copyLabel = "Chat Search Results",
+                    scrollable = true,
+                    textSize = 13f
+                )
             } catch (e: Exception) {
                 Logger.e("Chat search failed: ${e.message}", LogSource.MODULE)
                 GrindrPlus.showToast(Toast.LENGTH_LONG, "Search error: ${e.message}")
@@ -211,29 +167,11 @@ class Search(
                     appendLine("Messages in last reindex: ${stats.lastReindexCount ?: "N/A"}")
                 }
 
-                GrindrPlus.runOnMainThreadWithCurrentActivity { activity ->
-                    val dialogView = LinearLayout(activity).apply {
-                        orientation = LinearLayout.VERTICAL
-                        setPadding(60, 40, 60, 40)
-                    }
-
-                    val textView = AppCompatTextView(activity).apply {
-                        text = statsText
-                        textSize = 15f
-                        setTextColor(Color.WHITE)
-                        setTypeface(null, Typeface.NORMAL)
-                        setPadding(20, 20, 20, 20)
-                    }
-
-                    dialogView.addView(textView)
-
-                    AlertDialog.Builder(activity)
-                        .setTitle("Index Statistics")
-                        .setView(dialogView)
-                        .setPositiveButton("Close") { dialog, _ -> dialog.dismiss() }
-                        .create()
-                        .show()
-                }
+                CommandDialogs.showTextDialog(
+                    title = "Index Statistics",
+                    content = statsText,
+                    textSize = 15f
+                )
             } catch (e: Exception) {
                 Logger.e("Failed to fetch index stats: ${e.message}", LogSource.MODULE)
                 GrindrPlus.showToast(Toast.LENGTH_LONG, "Error: ${e.message}")

@@ -262,187 +262,112 @@ object Utils {
                     message = "Favorites and Blocks import files detected. GrindrPlus will process the favorites list first. " +
                             "Blocks import will be done on the next app restart.",
                     onConfirm = {
-                        val threshold = (Config.get("favorites_import_threshold", "500") as String).toInt()
-                        val favorites = favoritesFile.readLines()
-
-                        if (favorites.size > 50 && threshold < 1000) {
-                            showWarningDialog(
-                                context = activity,
-                                message = "High number of favorites and low threshold detected. " +
-                                        "Continuing may result in your account being banned. Do you want to proceed?",
-                                onConfirm = {
-                                    startFavoritesImport(activity, favorites, favoritesFile, threshold)
-                                },
-                                onCancel = {
-                                    Logger.i("Favorites import canceled by the user.")
-                                }
-                            )
-                        } else {
-                            startFavoritesImport(activity, favorites, favoritesFile, threshold)
-                        }
+                        launchImportWithThresholdCheck(
+                            activity, favoritesFile, "favorites_import_threshold",
+                            warnItemCount = 50, importType = ImportType.FAVORITES
+                        )
                     },
-                    onCancel = {
-                        Logger.i("Imports canceled by the user.")
-                    }
+                    onCancel = { Logger.i("Imports canceled by the user.") }
                 )
             } else if (favoritesFile.exists()) {
-                val threshold = (Config.get("favorites_import_threshold", "500") as String).toInt()
-                val favorites = favoritesFile.readLines()
-
-                if (favorites.size > 50 && threshold < 1000) {
-                    showWarningDialog(
-                        context = activity,
-                        message = "High number of favorites and low threshold detected. " +
-                                "Continuing may result in your account being banned. Do you want to proceed?",
-                        onConfirm = {
-                            startFavoritesImport(activity, favorites, favoritesFile, threshold)
-                        },
-                        onCancel = {
-                            isImportingSomething = false
-                            Logger.i("Favorites import canceled by the user.")
-                        }
-                    )
-                } else {
-                    startFavoritesImport(activity, favorites, favoritesFile, threshold)
-                }
+                launchImportWithThresholdCheck(
+                    activity, favoritesFile, "favorites_import_threshold",
+                    warnItemCount = 50, importType = ImportType.FAVORITES
+                )
             } else if (blocksFile.exists()) {
-                val threshold = (Config.get("block_import_threshold", "500") as String).toInt()
-                val blocks = blocksFile.readLines()
-
-                if (blocks.size > 100 && threshold < 1000) {
-                    showWarningDialog(
-                        context = activity,
-                        message = "High number of blocks and low threshold detected. " +
-                                "Continuing may result in your account being banned. Do you want to proceed?",
-                        onConfirm = {
-                            startBlockImport(activity, blocks, blocksFile, threshold)
-                        },
-                        onCancel = {
-                            isImportingSomething = false
-                            Logger.i("Block import canceled by the user.")
-                        }
-                    )
-                } else {
-                    startBlockImport(activity, blocks, blocksFile, threshold)
-                }
+                launchImportWithThresholdCheck(
+                    activity, blocksFile, "block_import_threshold",
+                    warnItemCount = 100, importType = ImportType.BLOCKS
+                )
             }
         }
     }
 
-    private fun startFavoritesImport(
-        activity: Activity,
-        favorites: List<String>,
-        favoritesFile: File,
-        threshold: Int
-    ) {
-        try {
+    private enum class ImportType { FAVORITES, BLOCKS }
 
-            showProgressDialog(
+    private fun launchImportWithThresholdCheck(
+        activity: Activity,
+        file: File,
+        thresholdConfigKey: String,
+        warnItemCount: Int,
+        importType: ImportType
+    ) {
+        val threshold = (Config.get(thresholdConfigKey, "500") as String).toInt()
+        val items = file.readLines()
+        val typeName = importType.name.lowercase()
+
+        if (items.size > warnItemCount && threshold < 1000) {
+            showWarningDialog(
                 context = activity,
-                message = "Importing favorites...",
-                successMessage = "Favorites import completed.",
-                failureMessage = "Favorites import failed.",
+                message = "High number of $typeName and low threshold detected. " +
+                        "Continuing may result in your account being banned. Do you want to proceed?",
+                onConfirm = { startBatchImport(activity, items, file, threshold, importType) },
                 onCancel = {
                     isImportingSomething = false
-                    Logger.i("Favorites import canceled by the user.")
-                },
-                onRunInBackground = { updateProgress, onComplete ->
-                    CoroutineScope(Dispatchers.IO).launch {
-                        try {
-                            favorites.forEachIndexed { index, id ->
-                                val parts = id.split("|||")
-                                val profileId = parts.getOrNull(0) ?: ""
-                                val note = parts.getOrNull(1)?.replace(NEWLINE, "\n") ?: ""
-                                val phoneNumber = parts.getOrNull(2)?.replace(NEWLINE, "\n") ?: ""
-                                httpClient.favorite(
-                                    profileId,
-                                    silent = true,
-                                    reflectInDb = false
-                                )
-                                if (note.isNotEmpty() || phoneNumber.isNotEmpty()) {
-                                    httpClient.addProfileNote(
-                                        profileId,
-                                        note,
-                                        phoneNumber,
-                                        silent = true
-                                    )
-                                }
-                                favoritesFile.writeText(favorites.drop(index + 1).joinToString("\n"))
-                                val progress = ((index + 1) * 100) / favorites.size
-                                updateProgress(progress)
-                                Thread.sleep(threshold.toLong())
-                            }
-
-                            withContext(Dispatchers.Main) {
-                                favoritesFile.delete()
-                                onComplete(true)
-                            }
-                        } catch (e: Exception) {
-                            withContext(Dispatchers.Main) {
-                                val message = "An error occurred while importing favorites: ${e.message ?: "Unknown error"}"
-                                GrindrPlus.showToast(Toast.LENGTH_LONG, message)
-                                Logger.apply {
-                                    e(message)
-                                    writeRaw(e.stackTraceToString())
-                                }
-                                onComplete(false)
-                            }
-                        } finally {
-                            isImportingSomething = false
-                        }
-                    }
+                    Logger.i("${typeName.replaceFirstChar { it.uppercase() }} import canceled by the user.")
                 }
             )
-        } catch (e: Exception) {
-            val message = "An error occurred while importing favorites: ${e.message ?: "Unknown error"}"
-            GrindrPlus.showToast(Toast.LENGTH_LONG, message)
-            Logger.apply {
-                e(message)
-                writeRaw(e.stackTraceToString())
-            }
+        } else {
+            startBatchImport(activity, items, file, threshold, importType)
         }
     }
 
-    private fun startBlockImport(
+    private fun startBatchImport(
         activity: Activity,
-        blocks: List<String>,
-        blocksFile: File,
-        threshold: Int
+        items: List<String>,
+        file: File,
+        threshold: Int,
+        importType: ImportType
     ) {
-        try {
+        val typeName = importType.name.lowercase()
+        val capitalizedName = typeName.replaceFirstChar { it.uppercase() }
+
+        if (importType == ImportType.BLOCKS) {
             shouldTriggerAntiblock = false
+        }
 
+        try {
             showProgressDialog(
                 context = activity,
-                message = "Importing blocks...",
-                successMessage = "Block import completed.",
-                failureMessage = "Block import failed.",
+                message = "Importing $typeName...",
+                successMessage = "$capitalizedName import completed.",
+                failureMessage = "$capitalizedName import failed.",
                 onCancel = {
                     isImportingSomething = false
-                    Logger.i("Block import canceled by the user.")
+                    Logger.i("$capitalizedName import canceled by the user.")
                 },
                 onRunInBackground = { updateProgress, onComplete ->
                     CoroutineScope(Dispatchers.IO).launch {
                         try {
-                            blocks.forEachIndexed { index, id ->
-                                httpClient.blockUser(
-                                    id,
-                                    silent = true,
-                                    reflectInDb = false
-                                )
-                                blocksFile.writeText(blocks.drop(index + 1).joinToString("\n"))
-                                val progress = ((index + 1) * 100) / blocks.size
+                            items.forEachIndexed { index, id ->
+                                when (importType) {
+                                    ImportType.FAVORITES -> {
+                                        val parts = id.split("|||")
+                                        val profileId = parts.getOrNull(0) ?: ""
+                                        val note = parts.getOrNull(1)?.replace(NEWLINE, "\n") ?: ""
+                                        val phoneNumber = parts.getOrNull(2)?.replace(NEWLINE, "\n") ?: ""
+                                        httpClient.favorite(profileId, silent = true, reflectInDb = false)
+                                        if (note.isNotEmpty() || phoneNumber.isNotEmpty()) {
+                                            httpClient.addProfileNote(profileId, note, phoneNumber, silent = true)
+                                        }
+                                    }
+                                    ImportType.BLOCKS -> {
+                                        httpClient.blockUser(id, silent = true, reflectInDb = false)
+                                    }
+                                }
+                                file.writeText(items.drop(index + 1).joinToString("\n"))
+                                val progress = ((index + 1) * 100) / items.size
                                 updateProgress(progress)
                                 Thread.sleep(threshold.toLong())
                             }
 
                             withContext(Dispatchers.Main) {
-                                blocksFile.delete()
+                                file.delete()
                                 onComplete(true)
                             }
                         } catch (e: Exception) {
                             withContext(Dispatchers.Main) {
-                                val message = "An error occurred while importing blocks: ${e.message ?: "Unknown error"}"
+                                val message = "An error occurred while importing $typeName: ${e.message ?: "Unknown error"}"
                                 GrindrPlus.showToast(Toast.LENGTH_LONG, message)
                                 Logger.apply {
                                     e(message)
@@ -451,18 +376,20 @@ object Utils {
                                 onComplete(false)
                             }
                         } finally {
-                            shouldTriggerAntiblock = true
+                            if (importType == ImportType.BLOCKS) {
+                                shouldTriggerAntiblock = true
+                            }
                             isImportingSomething = false
                         }
                     }
                 }
             )
         } catch (e: Exception) {
-            val message = "An error occurred while importing blocks: ${e.message ?: "Unknown error"}"
-            GrindrPlus.apply {
+            val message = "An error occurred while importing $typeName: ${e.message ?: "Unknown error"}"
+            if (importType == ImportType.BLOCKS) {
                 shouldTriggerAntiblock = true
-                showToast(Toast.LENGTH_LONG, message)
             }
+            GrindrPlus.showToast(Toast.LENGTH_LONG, message)
             Logger.apply {
                 e(message)
                 writeRaw(e.stackTraceToString())

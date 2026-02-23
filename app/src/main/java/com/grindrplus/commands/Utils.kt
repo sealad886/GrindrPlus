@@ -1,10 +1,6 @@
 package com.grindrplus.commands
 
-import android.app.AlertDialog
-import android.graphics.Color
-import android.widget.LinearLayout
 import android.widget.Toast
-import androidx.appcompat.widget.AppCompatTextView
 import com.grindrplus.GrindrPlus
 import com.grindrplus.core.Config
 import java.io.BufferedReader
@@ -45,40 +41,11 @@ class Utils(
             output.append("Error executing command: ${e.message}")
         }
 
-        GrindrPlus.runOnMainThreadWithCurrentActivity { activity ->
-            val dialogView = LinearLayout(activity).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(60, 40, 60, 40)
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-            }
-
-            val textView = AppCompatTextView(activity).apply {
-                text = output.toString()
-                textSize = 14f
-                setTextColor(Color.WHITE)
-                setPadding(20, 20, 20, 20)
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    setMargins(0, 20, 0, 0)
-                }
-            }
-
-            dialogView.addView(textView)
-
-            AlertDialog.Builder(activity)
-                .setTitle("Output")
-                .setView(dialogView)
-                .setPositiveButton("Close") { dialog, _ ->
-                    dialog.dismiss()
-                }
-                .create()
-                .show()
-        }
+        CommandDialogs.showTextDialog(
+            title = "Output",
+            content = output.toString(),
+            copyLabel = "Shell Output"
+        )
     }
 
     @Command("prefix", help = "Change the command prefix (default: /)")
