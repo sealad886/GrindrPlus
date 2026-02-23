@@ -12,6 +12,8 @@ import com.grindrplus.utils.hookConstructor
 import de.robv.android.xposed.XposedHelpers.getObjectField
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
@@ -19,7 +21,8 @@ class MessageIndexer : Hook(
     "Message indexer",
     "Index chat messages for search functionality"
 ) {
-    private val scope = CoroutineScope(Dispatchers.IO)
+    private val job = SupervisorJob()
+    private val scope = CoroutineScope(Dispatchers.IO + job)
     private val chatMessageHandler = "fo.k"
 
     private fun dao() = GrindrPlus.database.messageIndexDao()
@@ -27,6 +30,10 @@ class MessageIndexer : Hook(
     override fun init() {
         hookOutgoingMessages()
         hookIncomingNotifications()
+    }
+
+    override fun cleanup() {
+        job.cancel()
     }
 
     private fun hookOutgoingMessages() {

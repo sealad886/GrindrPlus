@@ -14,6 +14,8 @@ import com.grindrplus.utils.hook
 import com.grindrplus.utils.hookConstructor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -22,11 +24,16 @@ class AntiBlock : Hook(
     "Anti Block",
     "Notifies you when someone blocks or unblocks you"
 ) {
-    private val scope = CoroutineScope(Dispatchers.IO)
+    private val job = SupervisorJob()
+    private val scope = CoroutineScope(Dispatchers.IO + job)
     private var myProfileId: Long = 0
     private val chatDeleteConversationPlugin = "tn.c" // search for '"com.grindrapp.android.chat.ChatDeleteConversationPlugin",' and use the outer class
     private val inboxFragmentV2DeleteConversations = "yx.c" // search for '("chat_read_receipt", conversationId, null);'
     private val individualUnblockActivityViewModel = "vb0.w" // search for 'SnackbarEvent.i.ERROR, R.string.unblock_individual_sync_blocks_failure, null, new SnackbarEvent'
+
+    override fun cleanup() {
+        job.cancel()
+    }
 
     override fun init() {
         // do not invoke antiblock notification when the user is unblocking someone else
