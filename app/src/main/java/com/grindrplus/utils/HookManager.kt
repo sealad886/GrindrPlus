@@ -18,6 +18,7 @@ import com.grindrplus.hooks.ExpiringMedia
 import com.grindrplus.hooks.FeatureGranting
 import com.grindrplus.hooks.LocalSavedPhrases
 import com.grindrplus.hooks.LocationSpoofer
+import com.grindrplus.hooks.MessageIndexer
 import com.grindrplus.hooks.NotificationAlerts
 import com.grindrplus.hooks.OnlineIndicator
 import com.grindrplus.hooks.ProfileDetails
@@ -55,6 +56,7 @@ class HookManager {
                 FeatureGranting(),
                 LocalSavedPhrases(),
                 LocationSpoofer(),
+                MessageIndexer(),
                 NotificationAlerts(),
                 OnlineIndicator(),
                 ProfileDetails(),
