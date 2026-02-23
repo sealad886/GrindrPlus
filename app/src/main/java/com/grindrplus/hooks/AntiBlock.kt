@@ -72,10 +72,11 @@ class AntiBlock : Hook(
             findClass(inboxFragmentV2DeleteConversations)
                 .hook("b", HookStage.AFTER) { param ->
                     val numberOfChatsToDelete = (param.args().firstOrNull() as? List<*>)?.size ?: 0
-                    if (numberOfChatsToDelete == 0)
+                    if (numberOfChatsToDelete == 0) {
+                        GrindrPlus.shouldTriggerAntiblock = true
+                        GrindrPlus.blockCaller = ""
                         return@hook
-                    // is this okay to return here? shouldTriggerAntiblock stays false.
-                    // Do we expect another invocation with number > 0 ?
+                    }
 
                     logd("Request to delete $numberOfChatsToDelete chats")
                     scope.launch {

@@ -9,6 +9,7 @@ import com.grindrplus.utils.Hook
 import com.grindrplus.utils.HookStage
 import com.grindrplus.utils.hook
 import com.grindrplus.utils.hookConstructor
+import com.grindrplus.core.Config
 import de.robv.android.xposed.XposedHelpers.getObjectField
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -39,16 +40,20 @@ class MessageIndexer : Hook(
     private fun hookOutgoingMessages() {
         findClass(chatMessageHandler).hook("l", HookStage.AFTER) { param ->
             try {
-                val message = getObjectField(param.arg(0), "chatMessage")
-                val content = getObjectField(message, "content")
-                val sender = getObjectField(content, "sender") as String
-                val recipient = getObjectField(content, "recipient") as String
-                val body = getObjectField(content, "body") as String
+                val message = getObjectField(param.arg(0), "chatMessage") ?: return@hook
+                val content = getObjectField(message, "content") ?: return@hook
+                val sender = getObjectField(content, "sender") as? String ?: return@hook
+                val recipient = getObjectField(content, "recipient") as? String ?: return@hook
+                val body = getObjectField(content, "body") as? String ?: return@hook
 
                 val bodyJson = JSONObject(body)
                 if (!bodyJson.has("text")) return@hook
 
                 val text = bodyJson.getString("text")
+
+                val commandPrefix = Config.get("command_prefix", "/") as String
+                if (text.startsWith(commandPrefix)) return@hook
+
                 val messageId = tryExtractMessageId(message) ?: "out_${System.nanoTime()}"
                 val conversationId = buildConversationId(sender, recipient)
 

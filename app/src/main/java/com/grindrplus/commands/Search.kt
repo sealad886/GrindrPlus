@@ -35,7 +35,7 @@ class Search(
             return
         }
 
-        val query = args.joinToString(" ")
+        val query = sanitizeFtsQuery(args.joinToString(" "))
         coroutineScope.launch {
             try {
                 val results = withContext(Dispatchers.IO) {
@@ -68,7 +68,7 @@ class Search(
             return
         }
 
-        val query = args.joinToString(" ")
+        val query = sanitizeFtsQuery(args.joinToString(" "))
         val conversationId = buildConversationId(recipient, sender)
 
         coroutineScope.launch {
@@ -200,5 +200,11 @@ class Search(
     private fun buildConversationId(id1: String, id2: String): String {
         val ids = listOf(id1, id2).sorted()
         return "${ids[0]}:${ids[1]}"
+    }
+
+    private fun sanitizeFtsQuery(input: String): String {
+        val cleaned = input.replace(Regex("""["(){}\[\]*:^~]"""), " ").trim()
+        if (cleaned.isBlank()) return input.filter { it.isLetterOrDigit() || it.isWhitespace() }.trim()
+        return cleaned
     }
 }

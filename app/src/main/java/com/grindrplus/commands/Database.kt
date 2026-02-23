@@ -34,8 +34,12 @@ class Database(
         }
 
         val tableName = args[0]
+        if (!tableName.matches(Regex("^[a-zA-Z_][a-zA-Z0-9_]*$"))) {
+            GrindrPlus.showToast(Toast.LENGTH_LONG, "Invalid table name: $tableName")
+            return
+        }
         try {
-            val query = "SELECT * FROM $tableName;"
+            val query = "SELECT * FROM `$tableName`;"
             val rows = DatabaseHelper.query(query)
             val tableContent = if (rows.isEmpty()) {
                 "No rows found in table $tableName."
