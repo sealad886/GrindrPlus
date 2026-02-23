@@ -203,7 +203,9 @@ class Search(
     }
 
     private fun sanitizeFtsQuery(input: String): String {
-        val cleaned = input.replace(Regex("""["(){}\[\]*:^~]"""), " ").trim()
+        val cleaned = input.replace(Regex("""["(){}\[\]*:^~]"""), " ")
+            .replace(Regex("""\b(AND|OR|NOT|NEAR)\b"""), " ")
+            .trim()
         if (cleaned.isBlank()) return input.filter { it.isLetterOrDigit() || it.isWhitespace() }.trim()
         return cleaned
     }
