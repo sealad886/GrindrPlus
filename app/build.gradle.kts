@@ -117,6 +117,13 @@ dependencies {
     implementation(libs.fetch2)
     implementation(libs.fetch2okhttp)
     implementation(libs.rootbeer.lib)
+
+    testImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.room.testing)
+    androidTestImplementation(libs.kotlinx.coroutines.test)
     implementation(libs.zip.android) {
         artifact {
             type = "aar"
